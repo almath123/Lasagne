@@ -765,6 +765,7 @@ class LSTMLayer(MergeLayer):
                  unroll_scan=False,
                  precompute_input=True,
                  mask_input=None,
+                 rnn_name="",
                  **kwargs):
 
         # This layer inherits from a MergeLayer, because it can have two
@@ -791,6 +792,7 @@ class LSTMLayer(MergeLayer):
         self.grad_clipping = grad_clipping
         self.unroll_scan = unroll_scan
         self.precompute_input = precompute_input
+        self.rnn_name = rnn_name
 
         if unroll_scan and gradient_steps != -1:
             raise ValueError(
@@ -898,8 +900,14 @@ class LSTMLayer(MergeLayer):
         """
         # Retrieve the layer input
         input = inputs[0]
-        # Retrieve the mask when it is supplied
-        mask = inputs[1] if len(inputs) > 1 else None
+
+        if "prefill_cell" in kwargs and self.rnn_name in kwargs["prefill_cell"]:
+            mask = None
+            cell_prefill = inputs[1]
+        else:
+            # Retrieve the mask when it is supplied
+            mask = inputs[1] if len(inputs) > 1 else None
+            cell_prefill = None
 
         # Treat all dimensions after the second as flattened feature dimensions
         if input.ndim > 3:
@@ -1011,11 +1019,14 @@ class LSTMLayer(MergeLayer):
             step_fun = step
 
         ones = T.ones((num_batch, 1))
-        if isinstance(self.cell_init, T.TensorVariable):
-            cell_init = self.cell_init
+        if cell_prefill is not None:
+            cell_init = cell_prefill
         else:
-            # Dot against a 1s vector to repeat to shape (num_batch, num_units)
-            cell_init = T.dot(ones, self.cell_init)
+            if isinstance(self.cell_init, T.TensorVariable):
+                cell_init = self.cell_init
+            else:
+                # Dot against a 1s vector to repeat to shape (num_batch, num_units)
+                cell_init = T.dot(ones, self.cell_init)
 
         if isinstance(self.hid_init, T.TensorVariable):
             hid_init = self.hid_init
@@ -1075,6 +1086,10 @@ class LSTMLayer(MergeLayer):
         if self.backwards:
             hid_out = hid_out[:, ::-1]
             cell_out = cell_out[:, ::-1]
+
+        if "get_cell" in kwargs and self.rnn_name in kwargs["get_cell"]:
+            print "Returning cell for " + self.rnn_name
+            return cell_out
 
         return hid_out
 
