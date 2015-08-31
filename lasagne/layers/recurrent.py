@@ -903,11 +903,14 @@ class LSTMLayer(MergeLayer):
 
         if "prefill_cell" in kwargs and self.rnn_name in kwargs["prefill_cell"]:
             mask = None
-            cell_prefill = inputs[1]
+            pref_size = inputs[1].shape[0] / 2
+            hid_prefill = inputs[1][:pref_size]
+            cell_prefill = inputs[1][pref_size:]
         else:
             # Retrieve the mask when it is supplied
             mask = inputs[1] if len(inputs) > 1 else None
             cell_prefill = None
+            hid_prefill = None
 
         # Treat all dimensions after the second as flattened feature dimensions
         if input.ndim > 3:
@@ -1028,11 +1031,14 @@ class LSTMLayer(MergeLayer):
                 # Dot against a 1s vector to repeat to shape (num_batch, num_units)
                 cell_init = T.dot(ones, self.cell_init)
 
-        if isinstance(self.hid_init, T.TensorVariable):
-            hid_init = self.hid_init
+        if hid_prefill is not None:
+            hid_init = hid_prefill
         else:
-            # Dot against a 1s vector to repeat to shape (num_batch, num_units)
-            hid_init = T.dot(ones, self.hid_init)
+            if isinstance(self.hid_init, T.TensorVariable):
+                hid_init = self.hid_init
+            else:
+                # Dot against a 1s vector to repeat to shape (num_batch, num_units)
+                hid_init = T.dot(ones, self.hid_init)
 
         # The hidden-to-hidden weight matrix is always used in step
         non_seqs = [W_hid_stacked]
@@ -1089,7 +1095,7 @@ class LSTMLayer(MergeLayer):
 
         if "get_cell" in kwargs and self.rnn_name in kwargs["get_cell"]:
             print "Returning cell for " + self.rnn_name
-            return cell_out
+            return T.concatenate([hid_out, cell_out])
 
         return hid_out
 
