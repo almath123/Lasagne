@@ -765,6 +765,8 @@ class LSTMLayer(MergeLayer):
                  unroll_scan=False,
                  precompute_input=True,
                  mask_input=None,
+                 prefill_cell=False,
+                 get_cell=False,
                  rnn_name="",
                  **kwargs):
 
@@ -775,8 +777,12 @@ class LSTMLayer(MergeLayer):
         if mask_input is not None:
             incomings.append(mask_input)
 
+        self.get_cell = get_cell
+        self.prefill_cell = prefill_cell
+
         # Initialize parent layer
         super(LSTMLayer, self).__init__(incomings, **kwargs)
+
 
         # If the provided nonlinearity is None, make it linear
         if nonlinearity is None:
@@ -901,7 +907,7 @@ class LSTMLayer(MergeLayer):
         # Retrieve the layer input
         input = inputs[0]
 
-        if "prefill_cell" in kwargs and self.rnn_name in kwargs["prefill_cell"]:
+        if self.prefill_cell:
             mask = None
             pref_size = inputs[1].shape[0] / 2
             hid_prefill = inputs[1][:pref_size]
@@ -1093,7 +1099,7 @@ class LSTMLayer(MergeLayer):
             hid_out = hid_out[:, ::-1]
             cell_out = cell_out[:, ::-1]
 
-        if "get_cell" in kwargs and self.rnn_name in kwargs["get_cell"]:
+        if self.get_cell:
             print "Returning cell for " + self.rnn_name
             return T.concatenate([hid_out, cell_out])
 
