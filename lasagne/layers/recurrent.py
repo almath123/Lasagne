@@ -879,6 +879,8 @@ class LSTMLayer(MergeLayer):
         # The shape of the input to this layer will be the first element
         # of input_shapes, whether or not a mask input is being used.
         input_shape = input_shapes[0]
+        if self.get_cell:
+            return input_shape[0]*2, input_shape[1], self.num_units
         return input_shape[0], input_shape[1], self.num_units
 
     def get_output_for(self, inputs, **kwargs):
