@@ -766,6 +766,7 @@ class LSTMLayer(MergeLayer):
                  precompute_input=True,
                  mask_input=None,
                  prefill_cell=False,
+                 prefill_dim=0,
                  get_cell=False,
                  rnn_name="",
                  **kwargs):
@@ -779,6 +780,7 @@ class LSTMLayer(MergeLayer):
 
         self.get_cell = get_cell
         self.prefill_cell = prefill_cell
+        self.prefill_dim = prefill_dim
 
         # Initialize parent layer
         super(LSTMLayer, self).__init__(incomings, **kwargs)
@@ -911,9 +913,14 @@ class LSTMLayer(MergeLayer):
 
         if self.prefill_cell:
             mask = None
-            pref_size = inputs[1].shape[0] / 2
-            hid_prefill = inputs[1][:pref_size]
-            cell_prefill = inputs[1][pref_size:]
+            if self.prefill_dim == 0:
+                pref_size = inputs[1].shape[0] / 2
+                hid_prefill = inputs[1][:pref_size]
+                cell_prefill = inputs[1][pref_size:]
+            elif self.prefill_dim == 1:
+                pref_size = inputs[1].shape[1] / 2
+                hid_prefill = inputs[1][:, :pref_size]
+                cell_prefill = inputs[1][:, pref_size:]
         else:
             # Retrieve the mask when it is supplied
             mask = inputs[1] if len(inputs) > 1 else None
