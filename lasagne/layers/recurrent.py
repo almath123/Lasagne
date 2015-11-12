@@ -1221,12 +1221,18 @@ class GRULayer(MergeLayer):
                  unroll_scan=False,
                  precompute_input=True,
                  mask_input=None,
+                 prefill_h=None,
                  **kwargs):
 
         # This layer inherits from a MergeLayer, because it can have two
         # inputs - the layer input, and the mask.  We will just provide the
         # layer input as incomings, unless a mask input was provided.
         incomings = [incoming]
+        if prefill_h is not None:
+            incomings.append(prefill_h)
+            self.prefill_h = True
+        else:
+            self.prefill_h = False
         if mask_input is not None:
             incomings.append(mask_input)
 
@@ -1322,7 +1328,11 @@ class GRULayer(MergeLayer):
         # Retrieve the layer input
         input = inputs[0]
         # Retrieve the mask when it is supplied
-        mask = inputs[1] if len(inputs) > 1 else None
+        if (not hasattr(self, "prefill_h")) or (not self.prefill_h):
+            mask = inputs[1] if len(inputs) > 1 else None
+        else:
+            prefill_h = inputs[1] if len(inputs) > 1 else None
+            mask = inputs[2] if len(inputs) > 2 else None
 
         # Treat all dimensions after the second as flattened feature dimensions
         if input.ndim > 3:
@@ -1419,11 +1429,14 @@ class GRULayer(MergeLayer):
             sequences = [input]
             step_fun = step
 
-        if isinstance(self.hid_init, T.TensorVariable):
-            hid_init = self.hid_init
+        if self.prefill_h:
+            hid_init = prefill_h
         else:
-            # Dot against a 1s vector to repeat to shape (num_batch, num_units)
-            hid_init = T.dot(T.ones((num_batch, 1)), self.hid_init)
+            if isinstance(self.hid_init, T.TensorVariable):
+                hid_init = self.hid_init
+            else:
+                # Dot against a 1s vector to repeat to shape (num_batch, num_units)
+                hid_init = T.dot(T.ones((num_batch, 1)), self.hid_init)
 
         # The hidden-to-hidden weight matrix is always used in step
         non_seqs = [W_hid_stacked]
