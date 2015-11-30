@@ -796,14 +796,11 @@ class LSTMLayer(MergeLayer):
                  unroll_scan=False,
                  precompute_input=True,
                  mask_input=None,
-<<<<<<< HEAD
                  prefill_cell=False,
                  prefill_dim=0,
                  get_cell=False,
                  rnn_name="",
-=======
                  only_return_final=False,
->>>>>>> upstream/master
                  **kwargs):
 
         # This layer inherits from a MergeLayer, because it can have two
@@ -835,11 +832,8 @@ class LSTMLayer(MergeLayer):
         self.grad_clipping = grad_clipping
         self.unroll_scan = unroll_scan
         self.precompute_input = precompute_input
-<<<<<<< HEAD
         self.rnn_name = rnn_name
-=======
         self.only_return_final = only_return_final
->>>>>>> upstream/master
 
         if unroll_scan and gradient_steps != -1:
             raise ValueError(
@@ -920,11 +914,9 @@ class LSTMLayer(MergeLayer):
         # The shape of the input to this layer will be the first element
         # of input_shapes, whether or not a mask input is being used.
         input_shape = input_shapes[0]
-<<<<<<< HEAD
         if self.get_cell:
             return input_shape[0]*2, input_shape[1], self.num_units
         return input_shape[0], input_shape[1], self.num_units
-=======
         # When only_return_final is true, the second (sequence step) dimension
         # will be flattened
         if self.only_return_final:
@@ -932,7 +924,6 @@ class LSTMLayer(MergeLayer):
         # Otherwise, the shape will be (n_batch, n_steps, num_units)
         else:
             return input_shape[0], input_shape[1], self.num_units
->>>>>>> upstream/master
 
     def get_output_for(self, inputs, **kwargs):
         """
