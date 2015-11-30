@@ -1,11 +1,13 @@
 import pytest
+
 from lasagne.layers import RecurrentLayer, LSTMLayer, CustomRecurrentLayer
-from lasagne.layers import InputLayer, DenseLayer, GRULayer, Gate
+from lasagne.layers import InputLayer, DenseLayer, GRULayer, Gate, Layer
 from lasagne.layers import helper
 import theano
 import theano.tensor as T
 import numpy as np
 import lasagne
+from mock import Mock
 
 
 def test_recurrent_return_shape():
@@ -316,6 +318,26 @@ def test_recurrent_precompute():
     np.testing.assert_almost_equal(output_precompute, output_no_precompute)
 
 
+def test_recurrent_return_final():
+    num_batch, seq_len, n_features = 2, 3, 4
+    num_units = 2
+    in_shp = (num_batch, seq_len, n_features)
+    x_in = np.random.random(in_shp).astype('float32')
+
+    l_inp = InputLayer(in_shp)
+    lasagne.random.get_rng().seed(1234)
+    l_rec_final = RecurrentLayer(l_inp, num_units, only_return_final=True)
+    lasagne.random.get_rng().seed(1234)
+    l_rec_all = RecurrentLayer(l_inp, num_units, only_return_final=False)
+
+    output_final = helper.get_output(l_rec_final).eval({l_inp.input_var: x_in})
+    output_all = helper.get_output(l_rec_all).eval({l_inp.input_var: x_in})
+
+    assert output_final.shape == (output_all.shape[0], output_all.shape[2])
+    assert output_final.shape == lasagne.layers.get_output_shape(l_rec_final)
+    assert np.allclose(output_final, output_all[:, -1])
+
+
 def test_lstm_return_shape():
     num_batch, seq_len, n_features1, n_features2 = 5, 3, 10, 11
     num_units = 6
@@ -572,6 +594,26 @@ def test_lstm_passthrough():
     np.testing.assert_almost_equal(out.eval({l_in.input_var: inp}), inp)
 
 
+def test_lstm_return_final():
+    num_batch, seq_len, n_features = 2, 3, 4
+    num_units = 2
+    in_shp = (num_batch, seq_len, n_features)
+    x_in = np.random.random(in_shp).astype('float32')
+
+    l_inp = InputLayer(in_shp)
+    lasagne.random.get_rng().seed(1234)
+    l_rec_final = LSTMLayer(l_inp, num_units, only_return_final=True)
+    lasagne.random.get_rng().seed(1234)
+    l_rec_all = LSTMLayer(l_inp, num_units, only_return_final=False)
+
+    output_final = helper.get_output(l_rec_final).eval({l_inp.input_var: x_in})
+    output_all = helper.get_output(l_rec_all).eval({l_inp.input_var: x_in})
+
+    assert output_final.shape == (output_all.shape[0], output_all.shape[2])
+    assert output_final.shape == lasagne.layers.get_output_shape(l_rec_final)
+    assert np.allclose(output_final, output_all[:, -1])
+
+
 def test_gru_return_shape():
     num_batch, seq_len, n_features1, n_features2 = 5, 3, 10, 11
     num_units = 6
@@ -806,6 +848,26 @@ def test_gru_passthrough():
     np.testing.assert_almost_equal(out.eval({l_in.input_var: inp}), inp)
 
 
+def test_gru_return_final():
+    num_batch, seq_len, n_features = 2, 3, 4
+    num_units = 2
+    in_shp = (num_batch, seq_len, n_features)
+    x_in = np.random.random(in_shp).astype('float32')
+
+    l_inp = InputLayer(in_shp)
+    lasagne.random.get_rng().seed(1234)
+    l_rec_final = GRULayer(l_inp, num_units, only_return_final=True)
+    lasagne.random.get_rng().seed(1234)
+    l_rec_all = GRULayer(l_inp, num_units, only_return_final=False)
+
+    output_final = helper.get_output(l_rec_final).eval({l_inp.input_var: x_in})
+    output_all = helper.get_output(l_rec_all).eval({l_inp.input_var: x_in})
+
+    assert output_final.shape == (output_all.shape[0], output_all.shape[2])
+    assert output_final.shape == lasagne.layers.get_output_shape(l_rec_final)
+    assert np.allclose(output_final, output_all[:, -1])
+
+
 def test_gradient_steps_error():
     # Check that error is raised if gradient_steps is not -1 and scan_unroll
     # is true
@@ -832,3 +894,40 @@ def test_unroll_none_input_error():
 
     with pytest.raises(ValueError):
         GRULayer(l_in, 5, unroll_scan=True)
+
+
+def test_CustomRecurrentLayer_child_kwargs():
+    in_shape = (2, 3, 4)
+    n_hid = 5
+    # Construct mock for input-to-hidden layer
+    in_to_hid = Mock(
+        Layer,
+        output_shape=(in_shape[0]*in_shape[1], n_hid),
+        input_shape=(in_shape[0]*in_shape[1], in_shape[2]),
+        input_layer=InputLayer((in_shape[0]*in_shape[1], in_shape[2])))
+    # These two functions get called, need to return dummy values for them
+    in_to_hid.get_output_for.return_value = T.matrix()
+    in_to_hid.get_params.return_value = []
+    # As above, for hidden-to-hidden layer
+    hid_to_hid = Mock(
+        Layer,
+        output_shape=(in_shape[0], n_hid),
+        input_shape=(in_shape[0], n_hid),
+        input_layer=InputLayer((in_shape[0], n_hid)))
+    hid_to_hid.get_output_for.return_value = T.matrix()
+    hid_to_hid.get_params.return_value = []
+    # Construct a CustomRecurrentLayer using these Mocks
+    l_rec = lasagne.layers.CustomRecurrentLayer(
+        InputLayer(in_shape), in_to_hid, hid_to_hid)
+    # Call get_output with a kwarg, should be passd to in_to_hid and hid_to_hid
+    helper.get_output(l_rec, foo='bar')
+    # Retrieve the arguments used to call in_to_hid.get_output_for
+    args, kwargs = in_to_hid.get_output_for.call_args
+    # Should be one argument - the Theano expression
+    assert len(args) == 1
+    # One keywould argument - should be 'foo' -> 'bar'
+    assert kwargs == {'foo': 'bar'}
+    # Same as with in_to_hid
+    args, kwargs = hid_to_hid.get_output_for.call_args
+    assert len(args) == 1
+    assert kwargs == {'foo': 'bar'}

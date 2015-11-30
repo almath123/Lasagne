@@ -100,7 +100,18 @@ def get_or_compute_grads(loss_or_grads, params):
         of `params`, in which case a `ValueError` is raised.
         Otherwise, `loss_or_grads` is assumed to be a cost expression and
         the function returns `theano.grad(loss_or_grads, params)`.
+
+    Raises
+    ------
+    ValueError
+        If `loss_or_grads` is a list of a different length than `params`, or if
+        any element of `params` is not a shared variable (while we could still
+        compute its gradient, we can never update it and want to fail early).
     """
+    if any(not isinstance(p, theano.compile.SharedVariable) for p in params):
+        raise ValueError("params must contain shared variables only. If it "
+                         "contains arbitrary parameter expressions, then "
+                         "lasagne.utils.collect_shared_vars() may help you.")
     if isinstance(loss_or_grads, list):
         if not len(loss_or_grads) == len(params):
             raise ValueError("Got %d gradient expressions for %d parameters" %
@@ -487,7 +498,7 @@ def adadelta(loss_or_grads, params, learning_rate=1.0, rho=0.95, epsilon=1e-6):
        r_t &= \\rho r_{t-1} + (1-\\rho)*g^2\\\\
        \\eta_t &= \\eta \\frac{\\sqrt{s_{t-1} + \\epsilon}}
                              {\sqrt{r_t + \epsilon}}\\\\
-       s_t &= \\rho s_{t-1} + (1-\\rho)*g^2
+       s_t &= \\rho s_{t-1} + (1-\\rho)*(\\eta_t*g)^2
 
     References
     ----------

@@ -81,6 +81,7 @@
     MaxPool2DLayer
     Pool1DLayer
     Pool2DLayer
+    Upscale1DLayer
     Upscale2DLayer
     GlobalPoolLayer
     FeaturePoolLayer
@@ -151,8 +152,11 @@
 
     NonlinearityLayer
     BiasLayer
+    ExpressionLayer
     InverseLayer
     TransformerLayer
+    ParametricRectifierLayer
+    prelu
 
 
 .. rubric:: :doc:`layers/corrmm`
@@ -183,6 +187,7 @@
     :nosignatures:
 
     dnn.Conv2DDNNLayer
+    dnn.Conv3DDNNLayer
     dnn.MaxPool2DDNNLayer
     dnn.Pool2DDNNLayer
 

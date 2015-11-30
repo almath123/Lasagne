@@ -83,8 +83,9 @@ class CustomRecurrentLayer(MergeLayer):
     lasagne.layers.recurrent.CustomRecurrentLayer(incoming, input_to_hidden,
     hidden_to_hidden, nonlinearity=lasagne.nonlinearities.rectify,
     hid_init=lasagne.init.Constant(0.), backwards=False,
-    learn_init=False, gradient_steps=-1, grad_clipping=False,
-    unroll_scan=False, precompute_input=True, mask_input=None, **kwargs)
+    learn_init=False, gradient_steps=-1, grad_clipping=0,
+    unroll_scan=False, precompute_input=True, mask_input=None,
+    only_return_final=False, **kwargs)
 
     A layer which implements a recurrent connection.
 
@@ -107,7 +108,11 @@ class CustomRecurrentLayer(MergeLayer):
         :class:`lasagne.layers.Layer` instance which connects input to the
         hidden state (:math:`f_i`).  This layer may be connected to a chain of
         layers, which must end in a :class:`lasagne.layers.InputLayer` with the
-        same input shape as `incoming`.
+        same input shape as `incoming`, except for the first dimension: When
+        ``precompute_input == True`` (the default), it must be
+        ``incoming.output_shape[0]*incoming.output_shape[1]`` or ``None``; when
+        ``precompute_input == False``, it must be ``incoming.output_shape[0]``
+        or ``None``.
     hidden_to_hidden : :class:`lasagne.layers.Layer`
         Layer which connects the previous hidden state to the new state
         (:math:`f_h`).  This layer may be connected to a chain of layers, which
@@ -131,10 +136,9 @@ class CustomRecurrentLayer(MergeLayer):
     gradient_steps : int
         Number of timesteps to include in the backpropagated gradient.
         If -1, backpropagate through the entire sequence.
-    grad_clipping : False or float
-        If a float is provided, the gradient messages are clipped during the
-        backward pass.  If False, the gradients will not be clipped.  See [1]_
-        (p. 6) for further explanation.
+    grad_clipping : float
+        If nonzero, the gradient messages are clipped to the given value during
+        the backward pass.  See [1]_ (p. 6) for further explanation.
     unroll_scan : bool
         If True the recursion is unrolled instead of using scan. For some
         graphs this gives a significant speed up but it might also consume
@@ -150,6 +154,10 @@ class CustomRecurrentLayer(MergeLayer):
         Layer which allows for a sequence mask to be input, for when sequences
         are of variable length.  Default `None`, which means no mask will be
         supplied (i.e. all sequences are of the same length).
+    only_return_final : bool
+        If True, only return the final sequential output (e.g. for tasks where
+        a single target value for the entire sequence is desired).  In this
+        case, Theano makes an optimization which saves memory.
 
     Examples
     --------
@@ -195,10 +203,11 @@ class CustomRecurrentLayer(MergeLayer):
                  backwards=False,
                  learn_init=False,
                  gradient_steps=-1,
-                 grad_clipping=False,
+                 grad_clipping=0,
                  unroll_scan=False,
                  precompute_input=True,
                  mask_input=None,
+                 only_return_final=False,
                  **kwargs):
 
         # This layer inherits from a MergeLayer, because it can have two
@@ -218,6 +227,7 @@ class CustomRecurrentLayer(MergeLayer):
         self.grad_clipping = grad_clipping
         self.unroll_scan = unroll_scan
         self.precompute_input = precompute_input
+        self.only_return_final = only_return_final
 
         if unroll_scan and gradient_steps != -1:
             raise ValueError(
@@ -321,8 +331,14 @@ class CustomRecurrentLayer(MergeLayer):
         # The shape of the input to this layer will be the first element
         # of input_shapes, whether or not a mask input is being used.
         input_shape = input_shapes[0]
-        return ((input_shape[0], input_shape[1]) +
-                self.hidden_to_hidden.output_shape[1:])
+        # When only_return_final is true, the second (sequence step) dimension
+        # will be flattened
+        if self.only_return_final:
+            return (input_shape[0],) + self.hidden_to_hidden.output_shape[1:]
+        # Otherwise, the shape will be (n_batch, n_steps, trailing_dims...)
+        else:
+            return ((input_shape[0], input_shape[1]) +
+                    self.hidden_to_hidden.output_shape[1:])
 
     def get_output_for(self, inputs, **kwargs):
         """
@@ -384,17 +400,19 @@ class CustomRecurrentLayer(MergeLayer):
         # Create single recurrent computation step function
         def step(input_n, hid_previous, *args):
             # Compute the hidden-to-hidden activation
-            hid_pre = helper.get_output(self.hidden_to_hidden, hid_previous)
+            hid_pre = helper.get_output(
+                self.hidden_to_hidden, hid_previous, **kwargs)
 
             # If the dot product is precomputed then add it, otherwise
             # calculate the input_to_hidden values and add them
             if self.precompute_input:
                 hid_pre += input_n
             else:
-                hid_pre += helper.get_output(self.input_to_hidden, input_n)
+                hid_pre += helper.get_output(
+                    self.input_to_hidden, input_n, **kwargs)
 
             # Clip gradients
-            if self.grad_clipping is not False:
+            if self.grad_clipping:
                 hid_pre = theano.gradient.grad_clip(
                     hid_pre, -self.grad_clipping, self.grad_clipping)
 
@@ -450,12 +468,17 @@ class CustomRecurrentLayer(MergeLayer):
                 truncate_gradient=self.gradient_steps,
                 strict=True)[0]
 
-        # dimshuffle back to (n_batch, n_time_steps, n_features))
-        hid_out = hid_out.dimshuffle(1, 0, *range(2, hid_out.ndim))
+        # When it is requested that we only return the final sequence step,
+        # we need to slice it out immediately after scan is applied
+        if self.only_return_final:
+            hid_out = hid_out[-1]
+        else:
+            # dimshuffle back to (n_batch, n_time_steps, n_features))
+            hid_out = hid_out.dimshuffle(1, 0, *range(2, hid_out.ndim))
 
-        # if scan is backward reverse the output
-        if self.backwards:
-            hid_out = hid_out[:, ::-1]
+            # if scan is backward reverse the output
+            if self.backwards:
+                hid_out = hid_out[:, ::-1]
 
         return hid_out
 
@@ -466,8 +489,8 @@ class RecurrentLayer(CustomRecurrentLayer):
     W_in_to_hid=lasagne.init.Uniform(), W_hid_to_hid=lasagne.init.Uniform(),
     b=lasagne.init.Constant(0.), nonlinearity=lasagne.nonlinearities.rectify,
     hid_init=lasagne.init.Constant(0.), backwards=False, learn_init=False,
-    gradient_steps=-1, grad_clipping=False, unroll_scan=False,
-    precompute_input=True, mask_input=None, **kwargs)
+    gradient_steps=-1, grad_clipping=0, unroll_scan=False,
+    precompute_input=True, mask_input=None, only_return_final=False, **kwargs)
 
     Dense recurrent neural network (RNN) layer
 
@@ -507,10 +530,9 @@ class RecurrentLayer(CustomRecurrentLayer):
     gradient_steps : int
         Number of timesteps to include in the backpropagated gradient.
         If -1, backpropagate through the entire sequence.
-    grad_clipping : False or float
-        If a float is provided, the gradient messages are clipped during the
-        backward pass.  If False, the gradients will not be clipped.  See [1]_
-        (p. 6) for further explanation.
+    grad_clipping : float
+        If nonzero, the gradient messages are clipped to the given value during
+        the backward pass.  See [1]_ (p. 6) for further explanation.
     unroll_scan : bool
         If True the recursion is unrolled instead of using scan. For some
         graphs this gives a significant speed up but it might also consume
@@ -526,6 +548,10 @@ class RecurrentLayer(CustomRecurrentLayer):
         Layer which allows for a sequence mask to be input, for when sequences
         are of variable length.  Default `None`, which means no mask will be
         supplied (i.e. all sequences are of the same length).
+    only_return_final : bool
+        If True, only return the final sequential output (e.g. for tasks where
+        a single target value for the entire sequence is desired).  In this
+        case, Theano makes an optimization which saves memory.
 
     References
     ----------
@@ -541,10 +567,11 @@ class RecurrentLayer(CustomRecurrentLayer):
                  backwards=False,
                  learn_init=False,
                  gradient_steps=-1,
-                 grad_clipping=False,
+                 grad_clipping=0,
                  unroll_scan=False,
                  precompute_input=True,
                  mask_input=None,
+                 only_return_final=False,
                  **kwargs):
 
         if isinstance(incoming, tuple):
@@ -587,7 +614,8 @@ class RecurrentLayer(CustomRecurrentLayer):
             hid_init=hid_init, backwards=backwards, learn_init=learn_init,
             gradient_steps=gradient_steps,
             grad_clipping=grad_clipping, unroll_scan=unroll_scan,
-            precompute_input=precompute_input, mask_input=mask_input, **kwargs)
+            precompute_input=precompute_input, mask_input=mask_input,
+            only_return_final=only_return_final, **kwargs)
 
 
 class Gate(object):
@@ -660,8 +688,8 @@ class LSTMLayer(MergeLayer):
     nonlinearity=lasagne.nonlinearities.tanh,
     cell_init=lasagne.init.Constant(0.),
     hid_init=lasagne.init.Constant(0.), backwards=False, learn_init=False,
-    peepholes=True, gradient_steps=-1, grad_clipping=False, unroll_scan=False,
-    precompute_input=True, mask_input=None, **kwargs)
+    peepholes=True, gradient_steps=-1, grad_clipping=0, unroll_scan=False,
+    precompute_input=True, mask_input=None, only_return_final=False, **kwargs)
 
     A long short-term memory (LSTM) layer.
 
@@ -724,10 +752,9 @@ class LSTMLayer(MergeLayer):
     gradient_steps : int
         Number of timesteps to include in the backpropagated gradient.
         If -1, backpropagate through the entire sequence.
-    grad_clipping: False or float
-        If a float is provided, the gradient messages are clipped during the
-        backward pass.  If False, the gradients will not be clipped.  See [1]_
-        (p. 6) for further explanation.
+    grad_clipping : float
+        If nonzero, the gradient messages are clipped to the given value during
+        the backward pass.  See [1]_ (p. 6) for further explanation.
     unroll_scan : bool
         If True the recursion is unrolled instead of using scan. For some
         graphs this gives a significant speed up but it might also consume
@@ -743,6 +770,10 @@ class LSTMLayer(MergeLayer):
         Layer which allows for a sequence mask to be input, for when sequences
         are of variable length.  Default `None`, which means no mask will be
         supplied (i.e. all sequences are of the same length).
+    only_return_final : bool
+        If True, only return the final sequential output (e.g. for tasks where
+        a single target value for the entire sequence is desired).  In this
+        case, Theano makes an optimization which saves memory.
 
     References
     ----------
@@ -761,14 +792,18 @@ class LSTMLayer(MergeLayer):
                  learn_init=False,
                  peepholes=True,
                  gradient_steps=-1,
-                 grad_clipping=False,
+                 grad_clipping=0,
                  unroll_scan=False,
                  precompute_input=True,
                  mask_input=None,
+<<<<<<< HEAD
                  prefill_cell=False,
                  prefill_dim=0,
                  get_cell=False,
                  rnn_name="",
+=======
+                 only_return_final=False,
+>>>>>>> upstream/master
                  **kwargs):
 
         # This layer inherits from a MergeLayer, because it can have two
@@ -800,7 +835,11 @@ class LSTMLayer(MergeLayer):
         self.grad_clipping = grad_clipping
         self.unroll_scan = unroll_scan
         self.precompute_input = precompute_input
+<<<<<<< HEAD
         self.rnn_name = rnn_name
+=======
+        self.only_return_final = only_return_final
+>>>>>>> upstream/master
 
         if unroll_scan and gradient_steps != -1:
             raise ValueError(
@@ -881,9 +920,19 @@ class LSTMLayer(MergeLayer):
         # The shape of the input to this layer will be the first element
         # of input_shapes, whether or not a mask input is being used.
         input_shape = input_shapes[0]
+<<<<<<< HEAD
         if self.get_cell:
             return input_shape[0]*2, input_shape[1], self.num_units
         return input_shape[0], input_shape[1], self.num_units
+=======
+        # When only_return_final is true, the second (sequence step) dimension
+        # will be flattened
+        if self.only_return_final:
+            return input_shape[0], self.num_units
+        # Otherwise, the shape will be (n_batch, n_steps, num_units)
+        else:
+            return input_shape[0], input_shape[1], self.num_units
+>>>>>>> upstream/master
 
     def get_output_for(self, inputs, **kwargs):
         """
@@ -966,10 +1015,7 @@ class LSTMLayer(MergeLayer):
 
         # Create single recurrent computation step function
         # input_n is the n'th vector of the input
-        def step(input_n, cell_previous, hid_previous, W_hid_stacked,
-                 W_cell_to_ingate, W_cell_to_forgetgate,
-                 W_cell_to_outgate, W_in_stacked, b_stacked):
-
+        def step(input_n, cell_previous, hid_previous, *args):
             if not self.precompute_input:
                 input_n = T.dot(input_n, W_in_stacked) + b_stacked
 
@@ -977,7 +1023,7 @@ class LSTMLayer(MergeLayer):
             gates = input_n + T.dot(hid_previous, W_hid_stacked)
 
             # Clip gradients
-            if self.grad_clipping is not False:
+            if self.grad_clipping:
                 gates = theano.gradient.grad_clip(
                     gates, -self.grad_clipping, self.grad_clipping)
 
@@ -989,33 +1035,27 @@ class LSTMLayer(MergeLayer):
 
             if self.peepholes:
                 # Compute peephole connections
-                ingate += cell_previous*W_cell_to_ingate
-                forgetgate += cell_previous*W_cell_to_forgetgate
+                ingate += cell_previous*self.W_cell_to_ingate
+                forgetgate += cell_previous*self.W_cell_to_forgetgate
 
             # Apply nonlinearities
             ingate = self.nonlinearity_ingate(ingate)
             forgetgate = self.nonlinearity_forgetgate(forgetgate)
             cell_input = self.nonlinearity_cell(cell_input)
-            outgate = self.nonlinearity_outgate(outgate)
 
             # Compute new cell value
             cell = forgetgate*cell_previous + ingate*cell_input
 
             if self.peepholes:
-                outgate += cell*W_cell_to_outgate
+                outgate += cell*self.W_cell_to_outgate
+            outgate = self.nonlinearity_outgate(outgate)
 
             # Compute new hidden unit activation
             hid = outgate*self.nonlinearity(cell)
             return [cell, hid]
 
-        def step_masked(input_n, mask_n, cell_previous, hid_previous,
-                        W_hid_stacked, W_cell_to_ingate, W_cell_to_forgetgate,
-                        W_cell_to_outgate, W_in_stacked, b_stacked):
-
-            cell, hid = step(input_n, cell_previous, hid_previous,
-                             W_hid_stacked, W_cell_to_ingate,
-                             W_cell_to_forgetgate, W_cell_to_outgate,
-                             W_in_stacked, b_stacked)
+        def step_masked(input_n, mask_n, cell_previous, hid_previous, *args):
+            cell, hid = step(input_n, cell_previous, hid_previous, *args)
 
             # Skip over any input with mask 0 by copying the previous
             # hidden state; proceed normally for any input with mask 1.
@@ -1062,19 +1102,11 @@ class LSTMLayer(MergeLayer):
             non_seqs += [self.W_cell_to_ingate,
                          self.W_cell_to_forgetgate,
                          self.W_cell_to_outgate]
-        # theano.scan only allows for positional arguments, so when
-        # self.peepholes is False, we need to supply fake placeholder arguments
-        # for the three peephole matrices.
-        else:
-            non_seqs += [(), (), ()]
+
         # When we aren't precomputing the input outside of scan, we need to
         # provide the input weights and biases to the step function
         if not self.precompute_input:
             non_seqs += [W_in_stacked, b_stacked]
-        # As above, when we aren't providing these parameters, we need to
-        # supply placehold arguments
-        else:
-            non_seqs += [(), ()]
 
         if self.unroll_scan:
             # Retrieve the dimensionality of the incoming layer
@@ -1099,14 +1131,17 @@ class LSTMLayer(MergeLayer):
                 non_sequences=non_seqs,
                 strict=True)[0]
 
-        # dimshuffle back to (n_batch, n_time_steps, n_features))
-        hid_out = hid_out.dimshuffle(1, 0, 2)
-        cell_out = cell_out.dimshuffle(1, 0, 2)
+        # When it is requested that we only return the final sequence step,
+        # we need to slice it out immediately after scan is applied
+        if self.only_return_final:
+            hid_out = hid_out[-1]
+        else:
+            # dimshuffle back to (n_batch, n_time_steps, n_features))
+            hid_out = hid_out.dimshuffle(1, 0, 2)
 
-        # if scan is backward reverse the output
-        if self.backwards:
-            hid_out = hid_out[:, ::-1]
-            cell_out = cell_out[:, ::-1]
+            # if scan is backward reverse the output
+            if self.backwards:
+                hid_out = hid_out[:, ::-1]
 
         if self.get_cell:
             print "Returning cell for " + self.rnn_name
@@ -1122,9 +1157,9 @@ class GRULayer(MergeLayer):
     updategate=lasagne.layers.Gate(W_cell=None),
     hidden_update=lasagne.layers.Gate(
     W_cell=None, lasagne.nonlinearities.tanh),
-    hid_init=lasagne.init.Constant(0.), backwards=False, learn_init=True,
-    gradient_steps=-1, grad_clipping=False, unroll_scan=False,
-    precompute_input=True, mask_input=None, **kwargs)
+    hid_init=lasagne.init.Constant(0.), backwards=False, learn_init=False,
+    gradient_steps=-1, grad_clipping=0, unroll_scan=False,
+    precompute_input=True, mask_input=None, only_return_final=False, **kwargs)
 
     Gated Recurrent Unit (GRU) Layer
 
@@ -1167,10 +1202,9 @@ class GRULayer(MergeLayer):
     gradient_steps : int
         Number of timesteps to include in the backpropagated gradient.
         If -1, backpropagate through the entire sequence.
-    grad_clipping : False or float
-        If a float is provided, the gradient messages are clipped during the
-        backward pass.  If False, the gradients will not be clipped.  See [1]_
-        (p. 6) for further explanation.
+    grad_clipping : float
+        If nonzero, the gradient messages are clipped to the given value during
+        the backward pass.  See [1]_ (p. 6) for further explanation.
     unroll_scan : bool
         If True the recursion is unrolled instead of using scan. For some
         graphs this gives a significant speed up but it might also consume
@@ -1186,6 +1220,10 @@ class GRULayer(MergeLayer):
         Layer which allows for a sequence mask to be input, for when sequences
         are of variable length.  Default `None`, which means no mask will be
         supplied (i.e. all sequences are of the same length).
+    only_return_final : bool
+        If True, only return the final sequential output (e.g. for tasks where
+        a single target value for the entire sequence is desired).  In this
+        case, Theano makes an optimization which saves memory.
 
     References
     ----------
@@ -1215,13 +1253,14 @@ class GRULayer(MergeLayer):
                                     nonlinearity=nonlinearities.tanh),
                  hid_init=init.Constant(0.),
                  backwards=False,
-                 learn_init=True,
+                 learn_init=False,
                  gradient_steps=-1,
-                 grad_clipping=False,
+                 grad_clipping=0,
                  unroll_scan=False,
                  precompute_input=True,
                  mask_input=None,
                  prefill_h=None,
+                 only_return_final=False,
                  **kwargs):
 
         # This layer inherits from a MergeLayer, because it can have two
@@ -1246,6 +1285,7 @@ class GRULayer(MergeLayer):
         self.gradient_steps = gradient_steps
         self.unroll_scan = unroll_scan
         self.precompute_input = precompute_input
+        self.only_return_final = only_return_final
 
         if unroll_scan and gradient_steps != -1:
             raise ValueError(
@@ -1300,7 +1340,13 @@ class GRULayer(MergeLayer):
         # The shape of the input to this layer will be the first element
         # of input_shapes, whether or not a mask input is being used.
         input_shape = input_shapes[0]
-        return input_shape[0], input_shape[1], self.num_units
+        # When only_return_final is true, the second (sequence step) dimension
+        # will be flattened
+        if self.only_return_final:
+            return input_shape[0], self.num_units
+        # Otherwise, the shape will be (n_batch, n_steps, num_units)
+        else:
+            return input_shape[0], input_shape[1], self.num_units
 
     def get_output_for(self, inputs, **kwargs):
         """
@@ -1371,12 +1417,11 @@ class GRULayer(MergeLayer):
 
         # Create single recurrent computation step function
         # input__n is the n'th vector of the input
-        def step(input_n, hid_previous, W_hid_stacked, W_in_stacked,
-                 b_stacked):
+        def step(input_n, hid_previous, *args):
             # Compute W_{hr} h_{t - 1}, W_{hu} h_{t - 1}, and W_{hc} h_{t - 1}
             hid_input = T.dot(hid_previous, W_hid_stacked)
 
-            if self.grad_clipping is not False:
+            if self.grad_clipping:
                 input_n = theano.gradient.grad_clip(
                     input_n, -self.grad_clipping, self.grad_clipping)
                 hid_input = theano.gradient.grad_clip(
@@ -1396,7 +1441,7 @@ class GRULayer(MergeLayer):
             hidden_update_in = slice_w(input_n, 2)
             hidden_update_hid = slice_w(hid_input, 2)
             hidden_update = hidden_update_in + resetgate*hidden_update_hid
-            if self.grad_clipping is not False:
+            if self.grad_clipping:
                 hidden_update = theano.gradient.grad_clip(
                     hidden_update, -self.grad_clipping, self.grad_clipping)
             hidden_update = self.nonlinearity_hid(hidden_update)
@@ -1405,11 +1450,8 @@ class GRULayer(MergeLayer):
             hid = (1 - updategate)*hid_previous + updategate*hidden_update
             return hid
 
-        def step_masked(input_n, mask_n, hid_previous, W_hid_stacked,
-                        W_in_stacked, b_stacked):
-
-            hid = step(input_n, hid_previous, W_hid_stacked, W_in_stacked,
-                       b_stacked)
+        def step_masked(input_n, mask_n, hid_previous, *args):
+            hid = step(input_n, hid_previous, *args)
 
             # Skip over any input with mask 0 by copying the previous
             # hidden state; proceed normally for any input with mask 1.
@@ -1444,11 +1486,6 @@ class GRULayer(MergeLayer):
         # provide the input weights and biases to the step function
         if not self.precompute_input:
             non_seqs += [W_in_stacked, b_stacked]
-        # theano.scan only allows for positional arguments, so when
-        # self.precompute_input is True, we need to supply fake placeholder
-        # arguments for the input weights and biases.
-        else:
-            non_seqs += [(), ()]
 
         if self.unroll_scan:
             # Retrieve the dimensionality of the incoming layer
@@ -1473,11 +1510,16 @@ class GRULayer(MergeLayer):
                 truncate_gradient=self.gradient_steps,
                 strict=True)[0]
 
-        # dimshuffle back to (n_batch, n_time_steps, n_features))
-        hid_out = hid_out.dimshuffle(1, 0, 2)
+        # When it is requested that we only return the final sequence step,
+        # we need to slice it out immediately after scan is applied
+        if self.only_return_final:
+            hid_out = hid_out[-1]
+        else:
+            # dimshuffle back to (n_batch, n_time_steps, n_features))
+            hid_out = hid_out.dimshuffle(1, 0, 2)
 
-        # if scan is backward reverse the output
-        if self.backwards:
-            hid_out = hid_out[:, ::-1, :]
+            # if scan is backward reverse the output
+            if self.backwards:
+                hid_out = hid_out[:, ::-1]
 
         return hid_out

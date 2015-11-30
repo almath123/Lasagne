@@ -4,6 +4,123 @@ import pytest
 import theano
 
 
+class TestExpressionLayer:
+    @pytest.fixture
+    def ExpressionLayer(self):
+        from lasagne.layers.special import ExpressionLayer
+        return ExpressionLayer
+
+    @pytest.fixture
+    def input_layer(self):
+        from lasagne.layers import InputLayer
+        return InputLayer((2, 3, 4, 5))
+
+    @pytest.fixture
+    def input_layer_nones(self):
+        from lasagne.layers import InputLayer
+        return InputLayer((1, None, None, 5))
+
+    def np_result(self, func, input_layer):
+        X = np.random.uniform(-1, 1, input_layer.output_shape)
+        return X, func(X)
+
+    @pytest.mark.parametrize('func',
+                             [lambda X: X**2,
+                              lambda X: X.mean(-1),
+                              lambda X: X.sum(),
+                              ])
+    def test_tuple_shape(self, func, input_layer, ExpressionLayer):
+        from lasagne.layers.helper import get_output
+
+        X, expected = self.np_result(func, input_layer)
+        layer = ExpressionLayer(input_layer, func, output_shape=expected.shape)
+        assert layer.get_output_shape_for(X.shape) == expected.shape
+
+        output = get_output(layer, X).eval()
+        assert np.allclose(output, expected)
+
+    @pytest.mark.parametrize('func',
+                             [lambda X: X**2,
+                              lambda X: X.mean(-1),
+                              lambda X: X.sum(),
+                              ])
+    def test_callable_shape(self, func, input_layer, ExpressionLayer):
+        from lasagne.layers.helper import get_output
+
+        X, expected = self.np_result(func, input_layer)
+
+        def get_shape(input_shape):
+            return func(np.empty(shape=input_shape)).shape
+
+        layer = ExpressionLayer(input_layer, func, output_shape=get_shape)
+        assert layer.get_output_shape_for(X.shape) == expected.shape
+
+        output = get_output(layer, X).eval()
+        assert np.allclose(output, expected)
+
+    @pytest.mark.parametrize('func',
+                             [lambda X: X**2,
+                              lambda X: X.mean(-1),
+                              lambda X: X.sum(),
+                              ])
+    def test_none_shape(self, func, input_layer, ExpressionLayer):
+        from lasagne.layers.helper import get_output
+
+        X, expected = self.np_result(func, input_layer)
+
+        layer = ExpressionLayer(input_layer, func, output_shape=None)
+        if X.shape == expected.shape:
+            assert layer.get_output_shape_for(X.shape) == expected.shape
+
+        output = get_output(layer, X).eval()
+        assert np.allclose(output, expected)
+
+    @pytest.mark.parametrize('func',
+                             [lambda X: X**2,
+                              lambda X: X.mean(-1),
+                              lambda X: X.sum(),
+                              ])
+    def test_auto_shape(self, func, input_layer, ExpressionLayer):
+        from lasagne.layers.helper import get_output
+
+        X, expected = self.np_result(func, input_layer)
+
+        layer = ExpressionLayer(input_layer, func, output_shape='auto')
+        assert layer.get_output_shape_for(X.shape) == expected.shape
+
+        output = get_output(layer, X).eval()
+        assert np.allclose(output, expected)
+
+    @pytest.mark.parametrize('func',
+                             [lambda X: X**2,
+                              lambda X: X.mean(-1),
+                              lambda X: X.sum(),
+                              ])
+    def test_nones_shape(self, func, input_layer_nones, ExpressionLayer):
+        input_shape = input_layer_nones.output_shape
+        np_shape = tuple(0 if s is None else s for s in input_shape)
+        X = np.random.uniform(-1, 1, np_shape)
+        expected = func(X)
+        expected_shape = tuple(s if s else None for s in expected.shape)
+
+        layer = ExpressionLayer(input_layer_nones,
+                                func,
+                                output_shape=expected_shape)
+        assert layer.get_output_shape_for(input_shape) == expected_shape
+
+        def get_shape(input_shape):
+            return expected_shape
+        layer = ExpressionLayer(input_layer_nones,
+                                func,
+                                output_shape=get_shape)
+        assert layer.get_output_shape_for(input_shape) == expected_shape
+
+        layer = ExpressionLayer(input_layer_nones,
+                                func,
+                                output_shape='auto')
+        assert layer.get_output_shape_for(input_shape) == expected_shape
+
+
 class TestNonlinearityLayer:
     @pytest.fixture
     def NonlinearityLayer(self):
@@ -171,16 +288,161 @@ def test_transform_errors():
 
 def test_transform_downsample():
         import lasagne
-        downsample = 2.3
+        downsample = (0.7, 2.3)
         x = np.random.random((10, 3, 28, 28)).astype('float32')
         x_sym = theano.tensor.tensor4()
+
+        # create transformer with fixed input size
         l_in = lasagne.layers.InputLayer((None, 3, 28, 28))
         l_loc = lasagne.layers.DenseLayer(l_in, num_units=6)
         l_trans = lasagne.layers.TransformerLayer(l_in, l_loc,
                                                   downsample_factor=downsample)
 
+        # check that shape propagation works
+        assert l_trans.output_shape[0] is None
+        assert l_trans.output_shape[1:] == (3, int(28 / .7), int(28 / 2.3))
+
+        # check that data propagation works
         output = lasagne.layers.get_output(l_trans, x_sym)
         x_out = output.eval({x_sym: x})
-        assert x_out.shape[1:] == l_trans.output_shape[1:]
-        assert l_trans.output_shape[0] is None
         assert x_out.shape[0] == x.shape[0]
+        assert x_out.shape[1:] == l_trans.output_shape[1:]
+
+        # create transformer with variable input size
+        l_in = lasagne.layers.InputLayer((None, 3, None, 28))
+        l_loc = lasagne.layers.DenseLayer(
+                lasagne.layers.ReshapeLayer(l_in, ([0], 3*28*28)),
+                num_units=6, W=l_loc.W, b=l_loc.b)
+        l_trans = lasagne.layers.TransformerLayer(l_in, l_loc,
+                                                  downsample_factor=downsample)
+
+        # check that shape propagation works
+        assert l_trans.output_shape[0] is None
+        assert l_trans.output_shape[1] == 3
+        assert l_trans.output_shape[2] is None
+        assert l_trans.output_shape[3] == int(28 / 2.3)
+
+        # check that data propagation works
+        output = lasagne.layers.get_output(l_trans, x_sym)
+        x_out2 = output.eval({x_sym: x})
+        assert x_out2.shape == x_out.shape
+        np.testing.assert_allclose(x_out2, x_out, rtol=1e-5, atol=1e-5)
+
+
+def test_transform_identity():
+    from lasagne.layers import InputLayer, TransformerLayer
+    from lasagne.utils import floatX
+    from theano.tensor import constant
+    batchsize = 10
+    l_in = InputLayer((batchsize, 3, 28, 28))
+    l_loc = InputLayer((batchsize, 6))
+    layer = TransformerLayer(l_in, l_loc)
+    inputs = floatX(np.arange(np.prod(l_in.shape)).reshape(l_in.shape))
+    thetas = floatX(np.tile([1, 0, 0, 0, 1, 0], (batchsize, 1)))
+    outputs = layer.get_output_for([constant(inputs), constant(thetas)]).eval()
+    np.testing.assert_allclose(inputs, outputs, rtol=1e-6)
+
+
+class TestParametricRectifierLayer:
+    @pytest.fixture
+    def ParametricRectifierLayer(self):
+        from lasagne.layers.special import ParametricRectifierLayer
+        return ParametricRectifierLayer
+
+    @pytest.fixture
+    def init_alpha(self):
+        # initializer for a tensor of unique values
+        return lambda shape: (np.arange(np.prod(shape)).reshape(shape)) \
+            / np.prod(shape)
+
+    def test_alpha_init(self, ParametricRectifierLayer, init_alpha):
+        input_shape = (None, 3, 28, 28)
+        # default: alphas only over 2nd axis
+        layer = ParametricRectifierLayer(input_shape, alpha=init_alpha)
+        alpha = layer.alpha
+        assert layer.shared_axes == (0, 2, 3)
+        assert alpha.get_value().shape == (3, )
+        assert np.allclose(alpha.get_value(), init_alpha((3, )))
+
+        # scalar alpha
+        layer = ParametricRectifierLayer(input_shape, alpha=init_alpha,
+                                         shared_axes='all')
+        alpha = layer.alpha
+        assert layer.shared_axes == (0, 1, 2, 3)
+        assert alpha.get_value().shape == ()
+        assert np.allclose(alpha.get_value(), init_alpha((1,)))
+
+        # alphas shared over the 1st axis
+        layer = ParametricRectifierLayer(input_shape, alpha=init_alpha,
+                                         shared_axes=0)
+        alpha = layer.alpha
+        assert layer.shared_axes == (0,)
+        assert alpha.get_value().shape == (3, 28, 28)
+        assert np.allclose(alpha.get_value(), init_alpha((3, 28, 28)))
+
+        # alphas shared over the 1st and 4th axes
+        layer = ParametricRectifierLayer(input_shape, alpha=init_alpha,
+                                         shared_axes=(0, 3))
+        alpha = layer.alpha
+        assert layer.shared_axes == (0, 3)
+        assert alpha.get_value().shape == (3, 28)
+        assert np.allclose(alpha.get_value(), init_alpha((3, 28)))
+
+    def test_undefined_shape(self, ParametricRectifierLayer):
+        with pytest.raises(ValueError):
+            ParametricRectifierLayer((None, 3, 28, 28), shared_axes=(1, 2, 3))
+
+    def test_get_output_for(self, ParametricRectifierLayer, init_alpha):
+        input_shape = (3, 3, 28, 28)
+        # random input tensor
+        input = np.random.randn(*input_shape).astype(theano.config.floatX)
+
+        # default: alphas shared only along 2nd axis
+        layer = ParametricRectifierLayer(input_shape, alpha=init_alpha)
+        alpha_v = layer.alpha.get_value()
+        expected = np.maximum(input, 0) + np.minimum(input, 0) * \
+            alpha_v[None, :, None, None]
+        assert np.allclose(layer.get_output_for(input).eval(), expected)
+
+        # scalar alpha
+        layer = ParametricRectifierLayer(input_shape, alpha=init_alpha,
+                                         shared_axes='all')
+        alpha_v = layer.alpha.get_value()
+        expected = np.maximum(input, 0) + np.minimum(input, 0) * alpha_v
+        assert np.allclose(layer.get_output_for(input).eval(), expected)
+
+        # alphas shared over the 1st axis
+        layer = ParametricRectifierLayer(input_shape, alpha=init_alpha,
+                                         shared_axes=0)
+        alpha_v = layer.alpha.get_value()
+        expected = np.maximum(input, 0) + np.minimum(input, 0) * \
+            alpha_v[None, :, :, :]
+        assert np.allclose(layer.get_output_for(input).eval(), expected)
+
+        # alphas shared over the 1st and 4th axes
+        layer = ParametricRectifierLayer(input_shape, shared_axes=(0, 3),
+                                         alpha=init_alpha)
+        alpha_v = layer.alpha.get_value()
+        expected = np.maximum(input, 0) + np.minimum(input, 0) * \
+            alpha_v[None, :, :, None]
+        assert np.allclose(layer.get_output_for(input).eval(), expected)
+
+    def test_prelu(self, init_alpha):
+        import lasagne
+        input_shape = (3, 28)
+        input = np.random.randn(*input_shape).astype(theano.config.floatX)
+
+        l_in = lasagne.layers.input.InputLayer(input_shape)
+        l_dense = lasagne.layers.dense.DenseLayer(l_in, num_units=100)
+        l_prelu = lasagne.layers.prelu(l_dense, alpha=init_alpha)
+        output = lasagne.layers.get_output(l_prelu, input)
+
+        assert l_dense.nonlinearity == lasagne.nonlinearities.identity
+
+        W = l_dense.W.get_value()
+        b = l_dense.b.get_value()
+        alpha_v = l_prelu.alpha.get_value()
+        expected = np.dot(input, W) + b
+        expected = np.maximum(expected, 0) + \
+            np.minimum(expected, 0) * alpha_v
+        assert np.allclose(output.eval(), expected)

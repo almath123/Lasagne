@@ -16,11 +16,20 @@ class TestNonlinearities(object):
     def leaky_rectify_0(self, x):
         return self.rectify(x)
 
+    def softplus(self, x):
+        return np.log1p(np.exp(x))
+
     def sigmoid(self, x):
         return 1 / (1 + np.exp(-x))
 
     def tanh(self, x):
         return np.tanh(x)
+
+    def scaled_tanh(self, x):
+        return np.tanh(x)
+
+    def scaled_tanh_p(self, x):
+        return 2.27 * np.tanh(0.5 * x)
 
     def softmax(self, x):
         return (np.exp(x).T / np.exp(x).sum(-1)).T
@@ -28,14 +37,21 @@ class TestNonlinearities(object):
     @pytest.mark.parametrize('nonlinearity',
                              ['linear', 'rectify',
                               'leaky_rectify', 'sigmoid',
-                              'tanh', 'softmax',
-                              'leaky_rectify_0'])
+                              'tanh', 'scaled_tanh',
+                              'softmax', 'leaky_rectify_0',
+                              'scaled_tanh_p', 'softplus'])
     def test_nonlinearity(self, nonlinearity):
         import lasagne.nonlinearities
 
         if nonlinearity == 'leaky_rectify_0':
             from lasagne.nonlinearities import LeakyRectify
             theano_nonlinearity = LeakyRectify(leakiness=0)
+        elif nonlinearity == 'scaled_tanh':
+            from lasagne.nonlinearities import ScaledTanH
+            theano_nonlinearity = ScaledTanH()
+        elif nonlinearity == 'scaled_tanh_p':
+            from lasagne.nonlinearities import ScaledTanH
+            theano_nonlinearity = ScaledTanH(scale_in=0.5, scale_out=2.27)
         else:
             theano_nonlinearity = getattr(lasagne.nonlinearities,
                                           nonlinearity)
