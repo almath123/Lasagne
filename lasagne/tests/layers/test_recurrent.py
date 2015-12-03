@@ -59,6 +59,50 @@ def test_recurrent_nparams_learn_init():
     assert len(lasagne.layers.get_all_params(l_rec, regularizable=False)) == 2
 
 
+def test_recurrent_hid_init_layer():
+    # test that you can set hid_init to be a layer
+    l_inp = InputLayer((2, 2, 3))
+    l_inp_h = InputLayer((2, 5))
+    l_rec = RecurrentLayer(l_inp, 5, hid_init=l_inp_h)
+
+    x = T.tensor3()
+    h = T.matrix()
+
+    output = lasagne.layers.get_output(l_rec, {l_inp: x, l_inp_h: h})
+
+
+def test_recurrent_nparams_hid_init_layer():
+    # test that you can see layers through hid_init
+    l_inp = InputLayer((2, 2, 3))
+    l_inp_h = InputLayer((2, 5))
+    l_inp_h_de = DenseLayer(l_inp_h, 7)
+    l_rec = RecurrentLayer(l_inp, 7, hid_init=l_inp_h_de)
+
+    x = T.tensor3()
+    h = T.matrix()
+
+    # b, W_hid_to_hid and W_in_to_hid + W + b
+    assert len(lasagne.layers.get_all_params(l_rec, trainable=True)) == 5
+
+    # b (recurrent) + b (dense)
+    assert len(lasagne.layers.get_all_params(l_rec, regularizable=False)) == 2
+
+
+def test_recurrent_hid_init_mask():
+    # test that you can set hid_init to be a layer when a mask is provided
+    l_inp = InputLayer((2, 2, 3))
+    l_inp_h = InputLayer((2, 5))
+    l_inp_msk = InputLayer((2, 2))
+    l_rec = RecurrentLayer(l_inp, 5, hid_init=l_inp_h, mask_input=l_inp_msk)
+
+    x = T.tensor3()
+    h = T.matrix()
+    msk = T.matrix()
+
+    inputs = {l_inp: x, l_inp_h: h, l_inp_msk: msk}
+    output = lasagne.layers.get_output(l_rec, inputs)
+
+
 def test_recurrent_tensor_init():
     # check if passing in a TensorVariable to hid_init works
     num_units = 5
@@ -436,6 +480,58 @@ def test_lstm_tensor_init():
         {x: x_test, cell_init: cell_init_test, hid_init: hid_init_test})
 
     assert isinstance(output_val, np.ndarray)
+
+
+def test_lstm_hid_init_layer():
+    # test that you can set hid_init to be a layer
+    l_inp = InputLayer((2, 2, 3))
+    l_inp_h = InputLayer((2, 5))
+    l_cell_h = InputLayer((2, 5))
+    l_lstm = LSTMLayer(l_inp, 5, hid_init=l_inp_h, cell_init=l_cell_h)
+
+    x = T.tensor3()
+    h = T.matrix()
+
+    output = lasagne.layers.get_output(l_lstm, {l_inp: x, l_inp_h: h})
+
+
+def test_lstm_nparams_hid_init_layer():
+    # test that you can see layers through hid_init
+    l_inp = InputLayer((2, 2, 3))
+    l_inp_h = InputLayer((2, 5))
+    l_inp_h_de = DenseLayer(l_inp_h, 7)
+    l_inp_cell = InputLayer((2, 5))
+    l_inp_cell_de = DenseLayer(l_inp_cell, 7)
+    l_lstm = LSTMLayer(l_inp, 7, hid_init=l_inp_h_de, cell_init=l_inp_cell_de)
+
+    x = T.tensor3()
+    h = T.matrix()
+
+    # 3*n_gates + 4
+    # the 3 is because we have  hid_to_gate, in_to_gate and bias for each gate
+    # 4 is for the W and b parameters in the two DenseLayer layers
+    print(lasagne.layers.get_all_params(l_lstm, trainable=True))
+    assert len(lasagne.layers.get_all_params(l_lstm, trainable=True)) == 19
+
+    # GRU bias params(3) + Dense bias params(1) * 2
+    assert len(lasagne.layers.get_all_params(l_lstm, regularizable=False)) == 6
+
+
+def test_lstm_hid_init_mask():
+    # test that you can set hid_init to be a layer when a mask is provided
+    l_inp = InputLayer((2, 2, 3))
+    l_inp_h = InputLayer((2, 5))
+    l_inp_msk = InputLayer((2, 2))
+    l_cell_h = InputLayer((2, 5))
+    l_lstm = LSTMLayer(l_inp, 5, hid_init=l_inp_h, mask_input=l_inp_msk,
+                       cell_init=l_cell_h)
+
+    x = T.tensor3()
+    h = T.matrix()
+    msk = T.matrix()
+
+    inputs = {l_inp: x, l_inp_h: h, l_inp_msk: msk}
+    output = lasagne.layers.get_output(l_lstm, inputs)
 
 
 def test_lstm_init_val_error():
