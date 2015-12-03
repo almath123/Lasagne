@@ -704,6 +704,33 @@ def test_gru_init_val_error():
         l_rec = GRULayer(InputLayer((2, 2, 3)), 5, hid_init=vector)
 
 
+def test_gru_prefill_h():
+    # test that you can set prefill_h
+    l_inp = InputLayer((2, 2, 3))
+    l_inp_h = InputLayer((2, 5))
+    l_gru = GRULayer(l_inp, 5, prefill_h=l_inp_h)
+
+    x = T.tensor3()
+    h = T.matrix()
+
+    output = lasagne.layers.get_output(l_gru, {l_inp: x, l_inp_h: h})
+
+
+def test_gru_prefill_h_mask():
+    # test that you can set prefill_h
+    l_inp = InputLayer((2, 2, 3))
+    l_inp_h = InputLayer((2, 5))
+    l_inp_msk = InputLayer((2, 2))
+    l_gru = GRULayer(l_inp, 5, prefill_h=l_inp_h, mask_input=l_inp_msk)
+
+    x = T.tensor3()
+    h = T.matrix()
+    msk = T.matrix()
+
+    inputs = {l_inp: x, l_inp_h: h, l_inp_msk: msk}
+    output = lasagne.layers.get_output(l_gru, inputs)
+
+
 def test_gru_grad_clipping():
     # test that you can set grad_clip variable
     x = T.tensor3()
