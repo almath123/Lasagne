@@ -704,11 +704,11 @@ def test_gru_init_val_error():
         l_rec = GRULayer(InputLayer((2, 2, 3)), 5, hid_init=vector)
 
 
-def test_gru_prefill_h():
-    # test that you can set prefill_h
+def test_gru_hid_init_layer():
+    # test that you can set hid_init to be a layer
     l_inp = InputLayer((2, 2, 3))
     l_inp_h = InputLayer((2, 5))
-    l_gru = GRULayer(l_inp, 5, prefill_h=l_inp_h)
+    l_gru = GRULayer(l_inp, 5, hid_init=l_inp_h)
 
     x = T.tensor3()
     h = T.matrix()
@@ -716,12 +716,31 @@ def test_gru_prefill_h():
     output = lasagne.layers.get_output(l_gru, {l_inp: x, l_inp_h: h})
 
 
-def test_gru_prefill_h_mask():
-    # test that you can set prefill_h
+def test_gru_nparams_hid_init_layer():
+    # test that you can see layers through hid_init
+    l_inp = InputLayer((2, 2, 3))
+    l_inp_h = InputLayer((2, 5))
+    l_inp_h_de = DenseLayer(l_inp_h, 7)
+    l_gru = GRULayer(l_inp, 7, hid_init=l_inp_h_de)
+
+    x = T.tensor3()
+    h = T.matrix()
+
+    # 3*n_gates + 2
+    # the 3 is because we have  hid_to_gate, in_to_gate and bias for each gate
+    # 2 is for the W and b parameters in the DenseLayer
+    assert len(lasagne.layers.get_all_params(l_gru, trainable=True)) == 11
+
+    # GRU bias params(3) + Dense bias params(1)
+    assert len(lasagne.layers.get_all_params(l_gru, regularizable=False)) == 4
+
+
+def test_gru_hid_init_mask():
+    # test that you can set hid_init to be a layer when a mask is provided
     l_inp = InputLayer((2, 2, 3))
     l_inp_h = InputLayer((2, 5))
     l_inp_msk = InputLayer((2, 2))
-    l_gru = GRULayer(l_inp, 5, prefill_h=l_inp_h, mask_input=l_inp_msk)
+    l_gru = GRULayer(l_inp, 5, hid_init=l_inp_h, mask_input=l_inp_msk)
 
     x = T.tensor3()
     h = T.matrix()

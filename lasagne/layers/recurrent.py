@@ -64,7 +64,7 @@ from .. import nonlinearities
 from .. import init
 from ..utils import unroll_scan
 
-from .base import MergeLayer
+from .base import MergeLayer, Layer
 from .input import InputLayer
 from .dense import DenseLayer
 from . import helper
@@ -1217,7 +1217,6 @@ class GRULayer(MergeLayer):
                  unroll_scan=False,
                  precompute_input=True,
                  mask_input=None,
-                 prefill_h=None,
                  only_return_final=False,
                  **kwargs):
 
@@ -1226,13 +1225,13 @@ class GRULayer(MergeLayer):
         # layer input as incomings, unless a mask input was provided.
         incomings = [incoming]
         self.mask_incoming_index = -1
-        self.prefill_h_incoming_index = -1
+        self.hid_init_incoming_index = -1
         if mask_input is not None:
             incomings.append(mask_input)
             self.mask_incoming_index = len(incomings)-1
-        if prefill_h is not None:
-            incomings.append(prefill_h)
-            self.prefill_h_incoming_index = len(incomings)-1
+        if isinstance(hid_init, Layer):
+            incomings.append(hid_init)
+            self.hid_init_incoming_index = len(incomings)-1
             learn_init = False
 
         # Initialize parent layer
@@ -1291,6 +1290,8 @@ class GRULayer(MergeLayer):
                     "When hid_init is provided as a TensorVariable, it should "
                     "have 2 dimensions and have shape (num_batch, num_units)")
             self.hid_init = hid_init
+        elif isinstance(hid_init, Layer):
+            self.hid_init = hid_init
         else:
             self.hid_init = self.add_param(
                 hid_init, (1, self.num_units), name="hid_init",
@@ -1325,11 +1326,11 @@ class GRULayer(MergeLayer):
             ``(n_batch, n_time_steps)`` where ``mask[i, j] = 1`` when ``j <=
             (length of sequence i)`` and ``mask[i, j] = 0`` when ``j > (length
             of sequence i)``. When the hidden state of this layer is to be
-            pre-filled (i.e. was instantiated with `prefill_h != None`)
-            `inputs` should have length at least 2. If an input mask was
-            supplied then `inputs[2]` is the hidden state to prefill with. If
-            no input mask was supplied then `inputs[1] is the hidden state to
-            prefill with.
+            pre-filled (i.e. was instantiated with `isinstance(hid_init,
+            Layer)`) `inputs` should have length at least 2. If an input mask
+            was supplied then `inputs[2]` is the hidden state to prefill with.
+            If no input mask was supplied then `inputs[1] is the hidden state
+            to prefill with.
 
         Returns
         -------
@@ -1340,11 +1341,11 @@ class GRULayer(MergeLayer):
         input = inputs[0]
         # Retrieve the mask when it is supplied
         mask = None
-        prefill_h = None
+        hid_init = None
         if self.mask_incoming_index > 0:
             mask = inputs[self.mask_incoming_index]
-        if self.prefill_h_incoming_index > 0:
-            prefill_h = inputs[self.prefill_h_incoming_index]
+        if self.hid_init_incoming_index > 0:
+            hid_init = inputs[self.hid_init_incoming_index]
 
         # Treat all dimensions after the second as flattened feature dimensions
         if input.ndim > 3:
@@ -1437,8 +1438,8 @@ class GRULayer(MergeLayer):
             sequences = [input]
             step_fun = step
 
-        if prefill_h is not None:
-            hid_init = prefill_h
+        if isinstance(self.hid_init, Layer):
+            pass
         elif isinstance(self.hid_init, T.TensorVariable):
             hid_init = self.hid_init
         else:
