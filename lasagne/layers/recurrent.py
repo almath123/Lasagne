@@ -1174,6 +1174,10 @@ class GRULayer(MergeLayer):
         Layer which allows for a sequence mask to be input, for when sequences
         are of variable length.  Default `None`, which means no mask will be
         supplied (i.e. all sequences are of the same length).
+    prefill_h : :class:`lasagne.layers.Layer
+        Layer which is used to fill the initial hidden state, used for building
+        encoder-decoder models. Default `None`, which means the initial hidden
+        state is not pre-filled from a previous layer.
     only_return_final : bool
         If True, only return the final sequential output (e.g. for tasks where
         a single target value for the entire sequence is desired).  In this
@@ -1213,6 +1217,7 @@ class GRULayer(MergeLayer):
                  unroll_scan=False,
                  precompute_input=True,
                  mask_input=None,
+                 prefill_h=None,
                  only_return_final=False,
                  **kwargs):
 
@@ -1220,8 +1225,15 @@ class GRULayer(MergeLayer):
         # inputs - the layer input, and the mask.  We will just provide the
         # layer input as incomings, unless a mask input was provided.
         incomings = [incoming]
+        self.mask_incoming_index = -1
+        self.prefill_h_incoming_index = -1
         if mask_input is not None:
             incomings.append(mask_input)
+            self.mask_incoming_index = len(incomings)-1
+        if prefill_h is not None:
+            incomings.append(prefill_h)
+            self.prefill_h_incoming_index = len(incomings)-1
+            learn_init = False
 
         # Initialize parent layer
         super(GRULayer, self).__init__(incomings, **kwargs)
@@ -1304,15 +1316,20 @@ class GRULayer(MergeLayer):
         ----------
         inputs : list of theano.TensorType
             `inputs[0]` should always be the symbolic input variable.  When
-            this layer has a mask input (i.e. was instantiated with
-            `mask_input != None`, indicating that the lengths of sequences in
-            each batch vary), `inputs` should have length 2, where `inputs[1]`
-            is the `mask`.  The `mask` should be supplied as a Theano variable
+            this layer has a mask input (i.e. was instantiated with `mask_input
+            != None`, indicating that the lengths of sequences in each batch
+            vary), `inputs` should have length at least 2, where `inputs[1]` is
+            the `mask`.  The `mask` should be supplied as a Theano variable
             denoting whether each time step in each sequence in the batch is
             part of the sequence or not.  `mask` should be a matrix of shape
             ``(n_batch, n_time_steps)`` where ``mask[i, j] = 1`` when ``j <=
             (length of sequence i)`` and ``mask[i, j] = 0`` when ``j > (length
-            of sequence i)``.
+            of sequence i)``. When the hidden state of this layer is to be
+            pre-filled (i.e. was instantiated with `prefill_h != None`)
+            `inputs` should have length at least 2. If an input mask was
+            supplied then `inputs[2]` is the hidden state to prefill with. If
+            no input mask was supplied then `inputs[1] is the hidden state to
+            prefill with.
 
         Returns
         -------
@@ -1322,7 +1339,12 @@ class GRULayer(MergeLayer):
         # Retrieve the layer input
         input = inputs[0]
         # Retrieve the mask when it is supplied
-        mask = inputs[1] if len(inputs) > 1 else None
+        mask = None
+        prefill_h = None
+        if self.mask_incoming_index > 0:
+            mask = inputs[self.mask_incoming_index]
+        if self.prefill_h_incoming_index > 0:
+            prefill_h = inputs[self.prefill_h_incoming_index]
 
         # Treat all dimensions after the second as flattened feature dimensions
         if input.ndim > 3:
@@ -1415,7 +1437,9 @@ class GRULayer(MergeLayer):
             sequences = [input]
             step_fun = step
 
-        if isinstance(self.hid_init, T.TensorVariable):
+        if prefill_h is not None:
+            hid_init = prefill_h
+        elif isinstance(self.hid_init, T.TensorVariable):
             hid_init = self.hid_init
         else:
             # Dot against a 1s vector to repeat to shape (num_batch, num_units)
