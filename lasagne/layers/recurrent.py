@@ -121,7 +121,7 @@ class CustomRecurrentLayer(MergeLayer):
     nonlinearity : callable or None
         Nonlinearity to apply when computing new state (:math:`\sigma`). If
         None is provided, no nonlinearity will be applied.
-    hid_init : callable, np.ndarray, theano.shared or TensorVariable
+    hid_init : callable, np.ndarray, theano.shared, TensorVariable or Layer
         Initializer for initial hidden state (:math:`h_0`).  If a
         TensorVariable (Theano expression) is supplied, it will not be learned
         regardless of the value of `learn_init`.
@@ -222,7 +222,6 @@ class CustomRecurrentLayer(MergeLayer):
         if isinstance(hid_init, Layer):
             incomings.append(hid_init)
             self.hid_init_incoming_index = len(incomings)-1
-            learn_init = False
 
         super(CustomRecurrentLayer, self).__init__(incomings, **kwargs)
 
@@ -365,7 +364,10 @@ class CustomRecurrentLayer(MergeLayer):
             part of the sequence or not.  `mask` should be a matrix of shape
             ``(n_batch, n_time_steps)`` where ``mask[i, j] = 1`` when ``j <=
             (length of sequence i)`` and ``mask[i, j] = 0`` when ``j > (length
-            of sequence i)``.
+            of sequence i)``. When the hidden state of this layer is to be
+            pre-filled (i.e. was instantiated with `isinstance(hid_init,
+            Layer)`) `inputs` should have length at least 2, and `inputs[-1]`
+            is the hidden state to prefill with.
 
         Returns
         -------
@@ -532,7 +534,7 @@ class RecurrentLayer(CustomRecurrentLayer):
     nonlinearity : callable or None
         Nonlinearity to apply when computing new state (:math:`\sigma`). If
         None is provided, no nonlinearity will be applied.
-    hid_init : callable, np.ndarray, theano.shared or TensorVariable
+    hid_init : callable, np.ndarray, theano.shared, TensorVariable or Layer
         Initializer for initial hidden state (:math:`h_0`).  If a
         TensorVariable (Theano expression) is supplied, it will not be learned
         regardless of the value of `learn_init`.
@@ -745,11 +747,11 @@ class LSTMLayer(MergeLayer):
     nonlinearity : callable or None
         The nonlinearity that is applied to the output (:math:`\sigma_h`). If
         None is provided, no nonlinearity will be applied.
-    cell_init : callable, np.ndarray, theano.shared or TensorVariable
+    cell_init : callable, np.ndarray, theano.shared, TensorVariable or Layer
         Initializer for initial cell state (:math:`c_0`).  If a
         TensorVariable (Theano expression) is supplied, it will not be learned
         regardless of the value of `learn_init`.
-    hid_init : callable, np.ndarray, theano.shared or TensorVariable
+    hid_init : callable, np.ndarray, theano.shared, TensorVariable or Layer
         Initializer for initial hidden state (:math:`h_0`).  If a
         TensorVariable (Theano expression) is supplied, it will not be learned
         regardless of the value of `learn_init`.
@@ -828,11 +830,9 @@ class LSTMLayer(MergeLayer):
         if isinstance(hid_init, Layer):
             incomings.append(hid_init)
             self.hid_init_incoming_index = len(incomings)-1
-            learn_init = False
         if isinstance(cell_init, Layer):
             incomings.append(cell_init)
             self.cell_init_incoming_index = len(incomings)-1
-            learn_init = False
 
         # Initialize parent layer
         super(LSTMLayer, self).__init__(incomings, **kwargs)
@@ -960,7 +960,16 @@ class LSTMLayer(MergeLayer):
             part of the sequence or not.  `mask` should be a matrix of shape
             ``(n_batch, n_time_steps)`` where ``mask[i, j] = 1`` when ``j <=
             (length of sequence i)`` and ``mask[i, j] = 0`` when ``j > (length
-            of sequence i)``.
+            of sequence i)``. When the hidden state of this layer is to be
+            pre-filled (i.e. was instantiated with `isinstance(hid_init,
+            Layer)`) `inputs` should have length at least 2, and `inputs[-1]`
+            is the hidden state to prefill with. When the cell state of this
+            layer is to be pre-filled (i.e. was instantiated with
+            `isinstance(cell_init, Layer)`) `inputs` should have length at
+            least 2, and `inputs[-1]` is the hidden state to prefill with. When
+            both the cell state and the hidden state are being pre-filled
+            `inputs[-2]` is the hidden state, while `inputs[-1]` is the cell
+            state.
 
         Returns
         -------
@@ -1185,7 +1194,7 @@ class GRULayer(MergeLayer):
     hidden_update : Gate
         Parameters for the hidden update (:math:`c_t`): :math:`W_{xc}`,
         :math:`W_{hc}`, :math:`b_c`, and :math:`\sigma_c`.
-    hid_init : callable, np.ndarray, theano.shared or TensorVariable
+    hid_init : callable, np.ndarray, theano.shared, TensorVariable or Layer
         Initializer for initial hidden state (:math:`h_0`).  If a
         TensorVariable (Theano expression) is supplied, it will not be learned
         regardless of the value of `learn_init`.
@@ -1218,10 +1227,6 @@ class GRULayer(MergeLayer):
         Layer which allows for a sequence mask to be input, for when sequences
         are of variable length.  Default `None`, which means no mask will be
         supplied (i.e. all sequences are of the same length).
-    prefill_h : :class:`lasagne.layers.Layer
-        Layer which is used to fill the initial hidden state, used for building
-        encoder-decoder models. Default `None`, which means the initial hidden
-        state is not pre-filled from a previous layer.
     only_return_final : bool
         If True, only return the final sequential output (e.g. for tasks where
         a single target value for the entire sequence is desired).  In this
@@ -1276,7 +1281,6 @@ class GRULayer(MergeLayer):
         if isinstance(hid_init, Layer):
             incomings.append(hid_init)
             self.hid_init_incoming_index = len(incomings)-1
-            learn_init = False
 
         # Initialize parent layer
         super(GRULayer, self).__init__(incomings, **kwargs)
@@ -1361,20 +1365,18 @@ class GRULayer(MergeLayer):
         ----------
         inputs : list of theano.TensorType
             `inputs[0]` should always be the symbolic input variable.  When
-            this layer has a mask input (i.e. was instantiated with `mask_input
-            != None`, indicating that the lengths of sequences in each batch
-            vary), `inputs` should have length at least 2, where `inputs[1]` is
-            the `mask`.  The `mask` should be supplied as a Theano variable
+            this layer has a mask input (i.e. was instantiated with
+            `mask_input != None`, indicating that the lengths of sequences in
+            each batch vary), `inputs` should have length 2, where `inputs[1]`
+            is the `mask`.  The `mask` should be supplied as a Theano variable
             denoting whether each time step in each sequence in the batch is
             part of the sequence or not.  `mask` should be a matrix of shape
             ``(n_batch, n_time_steps)`` where ``mask[i, j] = 1`` when ``j <=
             (length of sequence i)`` and ``mask[i, j] = 0`` when ``j > (length
             of sequence i)``. When the hidden state of this layer is to be
             pre-filled (i.e. was instantiated with `isinstance(hid_init,
-            Layer)`) `inputs` should have length at least 2. If an input mask
-            was supplied then `inputs[2]` is the hidden state to prefill with.
-            If no input mask was supplied then `inputs[1] is the hidden state
-            to prefill with.
+            Layer)`) `inputs` should have length at least 2, and `inputs[-1]`
+            is the hidden state to prefill with.
 
         Returns
         -------

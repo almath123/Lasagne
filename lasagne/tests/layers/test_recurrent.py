@@ -78,8 +78,9 @@ def test_recurrent_nparams_hid_init_layer():
     l_inp_h_de = DenseLayer(l_inp_h, 7)
     l_rec = RecurrentLayer(l_inp, 7, hid_init=l_inp_h_de)
 
-    x = T.tensor3()
-    h = T.matrix()
+    # directly check the layers can be seen through hid_init
+    assert lasagne.layers.get_all_layers(l_rec) == [l_inp, l_inp_h, l_inp_h_de,
+                                                    l_rec]
 
     # b, W_hid_to_hid and W_in_to_hid + W + b
     assert len(lasagne.layers.get_all_params(l_rec, trainable=True)) == 5
@@ -504,13 +505,14 @@ def test_lstm_nparams_hid_init_layer():
     l_inp_cell_de = DenseLayer(l_inp_cell, 7)
     l_lstm = LSTMLayer(l_inp, 7, hid_init=l_inp_h_de, cell_init=l_inp_cell_de)
 
-    x = T.tensor3()
-    h = T.matrix()
+    # directly check the layers can be seen through hid_init
+    layers_to_find = [l_inp, l_inp_h, l_inp_h_de, l_inp_cell, l_inp_cell_de,
+                      l_lstm]
+    assert lasagne.layers.get_all_layers(l_lstm) == layers_to_find
 
     # 3*n_gates + 4
     # the 3 is because we have  hid_to_gate, in_to_gate and bias for each gate
     # 4 is for the W and b parameters in the two DenseLayer layers
-    print(lasagne.layers.get_all_params(l_lstm, trainable=True))
     assert len(lasagne.layers.get_all_params(l_lstm, trainable=True)) == 19
 
     # GRU bias params(3) + Dense bias params(1) * 2
@@ -819,8 +821,9 @@ def test_gru_nparams_hid_init_layer():
     l_inp_h_de = DenseLayer(l_inp_h, 7)
     l_gru = GRULayer(l_inp, 7, hid_init=l_inp_h_de)
 
-    x = T.tensor3()
-    h = T.matrix()
+    # directly check the layers can be seen through hid_init
+    assert lasagne.layers.get_all_layers(l_gru) == [l_inp, l_inp_h, l_inp_h_de,
+                                                    l_gru]
 
     # 3*n_gates + 2
     # the 3 is because we have  hid_to_gate, in_to_gate and bias for each gate
