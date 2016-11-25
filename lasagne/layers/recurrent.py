@@ -1858,6 +1858,6 @@ class GRULayerAttn(MergeLayer):
                 hid_out = hid_out[:, ::-1]
 
         #hid_out += theano.printing.Print("attn_out")(attn_out).sum() * 0.0000000001
-        self.attn = attn_out
+        self.attn = attn_out.dimshuffle(1, 0, 2)
 
         return hid_out
