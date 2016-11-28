@@ -1126,3 +1126,31 @@ def test_gru_attn_return_final():
     #output = helper.get_output([l_rec).eval(feed_dict)
 
     assert output.shape == lasagne.layers.get_output_shape(l_rec)
+
+def test_gru_MLPattn_return_final():
+    num_batch, seq_len, n_features = 2, 3, 4
+    num_units = 4
+    in_shp = (num_batch, seq_len, n_features)
+    
+    np.random.seed(123)
+    x_in = np.random.random(in_shp).astype('float32')*100
+    #enc_hout = np.random.random(in_shp).astype('float32')
+    enc_hout = x_in
+
+    l_inp = InputLayer(in_shp)
+    l_enc_hout = InputLayer(in_shp)
+
+    lasagne.random.get_rng().seed(1234)
+    l_rec = GRULayerAttn(l_inp, num_units, l_enc_hout, use_mlp_attn=True)
+            #attn_weight = lasagne.init.Normal(mean=100.0, std=100.0))
+
+    feed_dict = {l_inp.input_var: x_in, l_enc_hout.input_var: enc_hout}
+    th_rec = lasagne.layers.get_output(l_rec, feed_dict)
+    out_func = theano.function([l_inp.input_var, l_enc_hout.input_var], [th_rec, l_rec.attn])
+    output, attn_output = out_func(x_in, enc_hout)
+
+    print attn_output
+    
+    #output = helper.get_output([l_rec).eval(feed_dict)
+
+    assert output.shape == lasagne.layers.get_output_shape(l_rec)

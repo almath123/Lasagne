@@ -1577,6 +1577,7 @@ class GRULayerAttn(MergeLayer):
                  updategate=Gate(W_cell=None),
                  hidden_update=Gate(W_cell=None,
                                     nonlinearity=nonlinearities.tanh),
+                 attn_weight=init.GlorotNormal(),
                  hid_init=init.Constant(0.),
                  backwards=False,
                  learn_init=False,
@@ -1585,6 +1586,7 @@ class GRULayerAttn(MergeLayer):
                  unroll_scan=False,
                  mask_input=None,
                  only_return_final=False,
+                 use_mlp_attn=False,
                  **kwargs):
 
         # This layer inherits from a MergeLayer, because it can have three
@@ -1613,6 +1615,7 @@ class GRULayerAttn(MergeLayer):
         self.gradient_steps = gradient_steps
         self.unroll_scan = unroll_scan
         self.only_return_final = only_return_final
+        self.use_mlp_attn = use_mlp_attn
 
         if unroll_scan and gradient_steps != -1:
             raise ValueError(
@@ -1627,6 +1630,9 @@ class GRULayerAttn(MergeLayer):
 
         # Input dimensionality is the output dimensionality of the input layer
         num_inputs = np.prod(input_shape[2:])
+
+        if self.use_mlp_attn:
+            self.W_attn = self.add_param(attn_weight, (num_units, num_units), name="W_attn")
 
         def add_gate_params(gate, gate_name):
             """ Convenience function for adding layer parameters from a Gate
@@ -1754,7 +1760,16 @@ class GRULayerAttn(MergeLayer):
             #henc = theano.printing.Print("henc", ("shape",))(henc)
             hdec = hid_previous #N, H
             #hdec = theano.printing.Print("hdec", ("shape",))(hdec)
-            e_raw = T.batched_dot(henc, hdec)
+            if self.use_mlp_attn:
+                # self.W_attn -- H, H
+                #hdec = theano.printing.Print("hdec")(hdec)
+                hdec_proj = T.dot(hdec, self.W_attn)
+                #hdec_proj = theano.printing.Print("hdec_proj")(hdec_proj)
+                e_raw = T.batched_dot(henc, hdec_proj) #N, L_s
+            else:
+                e_raw = T.batched_dot(henc, hdec) #N, L_s
+            #e_raw = theano.printing.Print("e_raw", ("shape",))(e_raw)
+
             e_exp = T.exp(e_raw - e_raw.max(axis=1, keepdims=True))
             attn = e_exp / e_exp.sum(axis=1, keepdims=True) # N, L_s
 
@@ -1820,7 +1835,7 @@ class GRULayerAttn(MergeLayer):
         non_seqs = [W_hid_stacked]
         # When we aren't precomputing the input outside of scan, we need to
         # provide the input weights and biases to the step function
-        non_seqs += [W_in_stacked, b_stacked, encoder_hout]
+        non_seqs += [W_in_stacked, b_stacked, encoder_hout, self.W_attn]
 
         if self.unroll_scan:
             # Retrieve the dimensionality of the incoming layer
