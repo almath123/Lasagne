@@ -1835,7 +1835,9 @@ class GRULayerAttn(MergeLayer):
         non_seqs = [W_hid_stacked]
         # When we aren't precomputing the input outside of scan, we need to
         # provide the input weights and biases to the step function
-        non_seqs += [W_in_stacked, b_stacked, encoder_hout, self.W_attn]
+        non_seqs += [W_in_stacked, b_stacked, encoder_hout]
+        if self.use_mlp_attn:
+            non_seqs.append(self.W_attn)
 
         if self.unroll_scan:
             # Retrieve the dimensionality of the incoming layer
