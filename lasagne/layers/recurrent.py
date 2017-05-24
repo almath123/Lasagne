@@ -2159,7 +2159,7 @@ class GRULayerESM(MergeLayer):
             if self.teacher_force:
                 input_n = self.Wemb[input_n]
             else:
-                input_n = T.dot(sm_out, self.Wemb) #+ 0.00000001 * input_n
+                input_n = T.dot(theano.tensor.nnet.softmax(sm_out), self.Wemb) #+ 0.00000001 * input_n
 
 
             if self.grad_clipping:
@@ -2191,7 +2191,7 @@ class GRULayerESM(MergeLayer):
 
             num_leading_axes = 1
             #hid_sm = hid.flatten(num_leading_axes + 1)
-            sm_out = theano.tensor.nnet.softmax(T.dot(hid, self.Wsm) + self.bsm)
+            sm_out = T.dot(hid, self.Wsm) + self.bsm
             return hid, sm_out
 
         def step_masked(input_n, mask_n, hid_previous, *args):
