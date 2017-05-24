@@ -1981,7 +1981,7 @@ class GRULayerESM(MergeLayer):
                  Wemb=init.GlorotUniform(),
                  Wsm=init.Normal(),
                  bsm=init.Constant(0.),
-                 word_input_zero=init.Constant(0.),
+                 word_input_zero=init.Uniform(0.),
                  backwards=False,
                  learn_init=False,
                  gradient_steps=-1,
@@ -1989,6 +1989,7 @@ class GRULayerESM(MergeLayer):
                  unroll_scan=False,
                  mask_input=None,
                  only_return_final=False,
+                 teacher_force=False,
                  **kwargs):
 
         # This layer inherits from a MergeLayer, because it can have three
@@ -2017,6 +2018,7 @@ class GRULayerESM(MergeLayer):
         self.precompute_input = False
         self.only_return_final = only_return_final
         self.vocab_size = vocab_size
+        self.teacher_force = teacher_force
 
         if unroll_scan and gradient_steps != -1:
             raise ValueError(
@@ -2060,7 +2062,7 @@ class GRULayerESM(MergeLayer):
         self.Wsm = self.add_param(Wsm, (num_units, vocab_size), name="Wsm")
         self.bsm = self.add_param(bsm, (vocab_size,), name="bsm", regularizable=False)
         self.word_input_zero = self.add_param(word_input_zero, (1, vocab_size,), 
-                name="word_input_zero", regularizable=False)
+                name="word_input_zero", regularizable=False, trainable=not self.teacher_force)
 
         # Initialize hidden state
         if isinstance(hid_init, Layer):
@@ -2154,7 +2156,11 @@ class GRULayerESM(MergeLayer):
             # Compute W_{hr} h_{t - 1}, W_{hu} h_{t - 1}, and W_{hc} h_{t - 1}
             hid_input = T.dot(hid_previous, W_hid_stacked)
 
-            input_n = T.dot(sm_out, self.Wemb) #+ 0.00000001 * input_n
+            if self.teacher_force:
+                input_n = self.Wemb[input_n]
+            else:
+                input_n = T.dot(sm_out, self.Wemb) #+ 0.00000001 * input_n
+
 
             if self.grad_clipping:
                 input_n = theano.gradient.grad_clip(
@@ -2232,10 +2238,10 @@ class GRULayerESM(MergeLayer):
             hid_out = unroll_scan(
                 fn=step_fun,
                 sequences=sequences,
-                outputs_info=[hid_init],
+                outputs_info=[hid_init, word_input_zero],
                 go_backwards=self.backwards,
                 non_sequences=non_seqs,
-                n_steps=input_shape[1])[0]
+                n_steps=input_shape[1])[0][1]
         else:
             # Scan op iterates over first dimension of input and repeatedly
             # applies the step function
