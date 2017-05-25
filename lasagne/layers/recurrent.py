@@ -2157,9 +2157,11 @@ class GRULayerESM(MergeLayer):
             hid_input = T.dot(hid_previous, W_hid_stacked)
 
             if self.teacher_force:
-                input_n = self.Wemb[input_n]
+                input_n_force = self.Wemb[input_n]
+                input_n_noforce = T.dot(theano.tensor.nnet.softmax(sm_out), Wemb)
+                input_n = T.switch(T.ge(input_n, 0).dimshuffle((0, 'x')), input_n_force, input_n_noforce)
             else:
-                input_n = T.dot(theano.tensor.nnet.softmax(sm_out), Wemb) #+ 0.00000001 * input_n
+                input_n = T.dot(theano.tensor.nnet.softmax(sm_out), Wemb)
 
 
             if self.grad_clipping:
