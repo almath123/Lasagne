@@ -1990,6 +1990,7 @@ class GRULayerESM(MergeLayer):
                  mask_input=None,
                  only_return_final=False,
                  teacher_force=False,
+                 argmax=False,
                  **kwargs):
 
         # This layer inherits from a MergeLayer, because it can have three
@@ -2019,6 +2020,7 @@ class GRULayerESM(MergeLayer):
         self.only_return_final = only_return_final
         self.vocab_size = vocab_size
         self.teacher_force = teacher_force
+        self.argmax = argmax
 
         if unroll_scan and gradient_steps != -1:
             raise ValueError(
@@ -2157,11 +2159,14 @@ class GRULayerESM(MergeLayer):
             hid_input = T.dot(hid_previous, W_hid_stacked)
 
             if self.teacher_force:
-                input_n_force = self.Wemb[input_n]
+                input_n_force = Wemb[input_n]
                 input_n_noforce = T.dot(theano.tensor.nnet.softmax(sm_out), Wemb)
                 input_n = T.switch(T.ge(input_n, 0).dimshuffle((0, 'x')), input_n_force, input_n_noforce)
             else:
-                input_n = T.dot(theano.tensor.nnet.softmax(sm_out), Wemb)
+                if self.argmax:
+                    input_n = Wemb[T.argmax(theano.tensor.nnet.softmax(sm_out), axis=1)]
+                else:
+                    input_n = T.dot(theano.tensor.nnet.softmax(sm_out), Wemb)
 
 
             if self.grad_clipping:
