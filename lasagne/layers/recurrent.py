@@ -2160,7 +2160,10 @@ class GRULayerESM(MergeLayer):
 
             if self.teacher_force:
                 input_n_force = Wemb[input_n]
-                input_n_noforce = T.dot(theano.tensor.nnet.softmax(sm_out), Wemb)
+                if self.argmax:
+                    input_n_noforce = Wemb[T.argmax(theano.tensor.nnet.softmax(sm_out), axis=1)]
+                else:
+                    input_n_noforce = T.dot(theano.tensor.nnet.softmax(sm_out), Wemb)
                 input_n = T.switch(T.ge(input_n, 0).dimshuffle((0, 'x')), input_n_force, input_n_noforce)
             else:
                 if self.argmax:
