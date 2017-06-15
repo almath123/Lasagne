@@ -2395,6 +2395,7 @@ class GRULayerESMGum(MergeLayer):
                  mask_input=None,
                  only_return_final=False,
                  teacher_force=False,
+                 temp=1.0,
                  **kwargs):
 
         # This layer inherits from a MergeLayer, because it can have three
@@ -2426,6 +2427,7 @@ class GRULayerESMGum(MergeLayer):
         self.only_return_final = only_return_final
         self.vocab_size = vocab_size
         self.teacher_force = teacher_force
+        self.temp = temp
 
         if unroll_scan and gradient_steps != -1:
             raise ValueError(
@@ -2565,7 +2567,7 @@ class GRULayerESMGum(MergeLayer):
 
             if self.teacher_force:
                 input_n_force = Wemb[input_n]
-                input_n_noforce = T.dot(theano.tensor.nnet.softmax(sm_out + gb), Wemb)
+                input_n_noforce = T.dot(theano.tensor.nnet.softmax((sm_out + gb)/temp), Wemb)
                 input_n = T.switch(T.ge(input_n, 0).dimshuffle((0, 'x')), input_n_force, input_n_noforce)
             else:
                 input_n = T.dot(theano.tensor.nnet.softmax(sm_out + gb), Wemb)
@@ -2647,7 +2649,8 @@ class GRULayerESMGum(MergeLayer):
         Wemb = self.Wemb
         Wsm = self.Wsm
         bsm = self.bsm
-        non_seqs += [Wemb, Wsm, bsm]
+        temp = self.temp
+        non_seqs += [Wemb, Wsm, bsm, temp]
 
 
         if self.unroll_scan:
