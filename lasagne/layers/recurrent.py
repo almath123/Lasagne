@@ -2471,7 +2471,7 @@ class GRULayerESMGum(MergeLayer):
         self.Wsm = self.add_param(Wsm, (num_units, vocab_size), name="Wsm")
         self.bsm = self.add_param(bsm, (vocab_size,), name="bsm", regularizable=False)
         self.word_input_zero = self.add_param(word_input_zero, (1, vocab_size,), 
-                name="word_input_zero", regularizable=False, trainable=not self.teacher_force)
+                name="word_input_zero", regularizable=False, trainable=self.teacher_force)
 
         # Initialize hidden state
         if isinstance(hid_init, Layer):
