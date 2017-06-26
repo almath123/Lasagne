@@ -3035,7 +3035,7 @@ class GRULayerESMGumAttn(MergeLayer):
             e_exp = T.exp(e_raw - e_raw.max(axis=1, keepdims=True))
             e_exp *= enc_in_mask
             attn = e_exp / e_exp.sum(axis=1, keepdims=True) # N, L_s
-            attn = attn + theano.printing.Print("Attn:")(attn[0, :]).dimshuffle(('x', 0))*0.00000001
+            #attn = attn + theano.printing.Print("Attn:")(attn[0, :]).dimshuffle(('x', 0))*0.00000001
 
             context = attn.dimshuffle((0, 1, 'x')) * henc
             context = context.sum(axis=1)
