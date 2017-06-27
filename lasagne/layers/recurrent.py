@@ -3033,8 +3033,9 @@ class GRULayerESMGumAttn(MergeLayer):
             #e_raw = theano.printing.Print("e_raw", ("shape",))(e_raw)
 
             e_raw_msk = e_raw * enc_in_mask
+            #e_raw_msk = e_raw_msk + theano.printing.Print("e_raw_msk:")(e_raw_msk[0, :]).dimshuffle(('x', 0))*0.00000000001
             e_exp = T.exp(e_raw_msk - e_raw_msk.max(axis=1, keepdims=True))
-            e_exp *= enc_in_mask
+            e_exp = e_exp * enc_in_mask + 1e-8
             attn = e_exp / e_exp.sum(axis=1, keepdims=True) # N, L_s
             #attn = attn + theano.printing.Print("Attn:")(attn[0, :]).dimshuffle(('x', 0))*0.00000001
 
