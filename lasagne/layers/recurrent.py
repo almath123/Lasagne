@@ -76,12 +76,14 @@ __all__ = [
     "CustomRecurrentLayer",
     "RecurrentLayer",
     "Gate",
+    "ContextGate",
     "LSTMLayer",
     "GRULayer",
     "GRULayerAttn",
     "GRULayerESM",
     "GRULayerESMGum",
-    "GRULayerESMGumAttn"
+    "GRULayerESMGumAttn",
+    "GRULayerESMGumPreAttn"
 ]
 
 
@@ -684,6 +686,11 @@ class Gate(object):
             self.nonlinearity = nonlinearities.identity
         else:
             self.nonlinearity = nonlinearity
+
+class ContextGate(Gate):
+    def __init__(self, W_context=init.Normal(0.1), *args, **kwargs):
+        super(ContextGate, self).__init__(*args, **kwargs)
+        self.W_context = W_context
 
 
 class LSTMLayer(MergeLayer):
@@ -3085,6 +3092,462 @@ class GRULayerESMGumAttn(MergeLayer):
 
         # The hidden-to-hidden weight matrix is always used in step
         non_seqs = [W_hid_stacked]
+        # When we aren't precomputing the input outside of scan, we need to
+        # provide the input weights and biases to the step function
+        non_seqs += [W_in_stacked, b_stacked]
+
+        # include embedding and softmax layer parameters
+        Wemb = self.Wemb
+        Wsm = self.Wsm
+        bsm = self.bsm
+        temp = self.temp
+        non_seqs += [Wemb, Wsm, bsm, temp, encoder_hout, enc_in_mask]
+        
+        if self.use_mlp_attn:
+            W_attn = self.W_attn
+            non_seqs.append(W_attn)
+
+        if self.unroll_scan:
+            # Retrieve the dimensionality of the incoming layer
+            input_shape = self.input_shapes[0]
+            # Explicitly unroll the recurrence instead of using scan
+            hid_out = unroll_scan(
+                fn=step_fun,
+                sequences=sequences,
+                outputs_info=[hid_init, word_input_zero],
+                go_backwards=self.backwards,
+                non_sequences=non_seqs,
+                n_steps=input_shape[1])[0][1]
+        else:
+            # Scan op iterates over first dimension of input and repeatedly
+            # applies the step function
+            hid_out = theano.scan(
+                fn=step_fun,
+                sequences=sequences,
+                go_backwards=self.backwards,
+                outputs_info=[hid_init, word_input_zero],
+                non_sequences=non_seqs,
+                truncate_gradient=self.gradient_steps,
+                strict=True)[0][1]
+
+        # When it is requested that we only return the final sequence step,
+        # we need to slice it out immediately after scan is applied
+        if self.only_return_final:
+            hid_out = hid_out[-1]
+        else:
+            # dimshuffle back to (n_batch, n_time_steps, n_features))
+            hid_out = hid_out.dimshuffle(1, 0, 2)
+
+            # if scan is backward reverse the output
+            if self.backwards:
+                hid_out = hid_out[:, ::-1]
+
+        return hid_out
+
+class GRULayerESMGumPreAttn(MergeLayer):
+    r"""
+    lasagne.layers.recurrent.GRULayer(incoming, num_units,
+    resetgate=lasagne.layers.Gate(W_cell=None),
+    updategate=lasagne.layers.Gate(W_cell=None),
+    hidden_update=lasagne.layers.Gate(
+    W_cell=None, lasagne.nonlinearities.tanh),
+    hid_init=lasagne.init.Constant(0.), backwards=False, learn_init=False,
+    gradient_steps=-1, grad_clipping=0, unroll_scan=False,
+    precompute_input=True, mask_input=None, only_return_final=False, **kwargs)
+
+    Gated Recurrent Unit (GRU) Layer
+
+    Implements the recurrent step proposed in [1]_, which computes the output
+    by
+
+    .. math ::
+        r_t &= \sigma_r(x_t W_{xr} + h_{t - 1} W_{hr} + b_r)\\
+        u_t &= \sigma_u(x_t W_{xu} + h_{t - 1} W_{hu} + b_u)\\
+        c_t &= \sigma_c(x_t W_{xc} + r_t \odot (h_{t - 1} W_{hc}) + b_c)\\
+        h_t &= (1 - u_t) \odot h_{t - 1} + u_t \odot c_t
+
+    Parameters
+    ----------
+    incoming : a :class:`lasagne.layers.Layer` instance or a tuple
+        The layer feeding into this layer, or the expected input shape.
+    num_units : int
+        Number of hidden units in the layer.
+    resetgate : Gate
+        Parameters for the reset gate (:math:`r_t`): :math:`W_{xr}`,
+        :math:`W_{hr}`, :math:`b_r`, and :math:`\sigma_r`.
+    updategate : Gate
+        Parameters for the update gate (:math:`u_t`): :math:`W_{xu}`,
+        :math:`W_{hu}`, :math:`b_u`, and :math:`\sigma_u`.
+    hidden_update : Gate
+        Parameters for the hidden update (:math:`c_t`): :math:`W_{xc}`,
+        :math:`W_{hc}`, :math:`b_c`, and :math:`\sigma_c`.
+    hid_init : callable, np.ndarray, theano.shared or :class:`Layer`
+        Initializer for initial hidden state (:math:`h_0`).
+    backwards : bool
+        If True, process the sequence backwards and then reverse the
+        output again such that the output from the layer is always
+        from :math:`x_1` to :math:`x_n`.
+    learn_init : bool
+        If True, initial hidden values are learned.
+    gradient_steps : int
+        Number of timesteps to include in the backpropagated gradient.
+        If -1, backpropagate through the entire sequence.
+    grad_clipping : float
+        If nonzero, the gradient messages are clipped to the given value during
+        the backward pass.  See [1]_ (p. 6) for further explanation.
+    unroll_scan : bool
+        If True the recursion is unrolled instead of using scan. For some
+        graphs this gives a significant speed up but it might also consume
+        more memory. When `unroll_scan` is True, backpropagation always
+        includes the full sequence, so `gradient_steps` must be set to -1 and
+        the input sequence length must be known at compile time (i.e., cannot
+        be given as None).
+    precompute_input : bool
+        If True, precompute input_to_hid before iterating through
+        the sequence. This can result in a speedup at the expense of
+        an increase in memory usage.
+    mask_input : :class:`lasagne.layers.Layer`
+        Layer which allows for a sequence mask to be input, for when sequences
+        are of variable length.  Default `None`, which means no mask will be
+        supplied (i.e. all sequences are of the same length).
+    only_return_final : bool
+        If True, only return the final sequential output (e.g. for tasks where
+        a single target value for the entire sequence is desired).  In this
+        case, Theano makes an optimization which saves memory.
+
+    References
+    ----------
+    .. [1] Cho, Kyunghyun, et al: On the properties of neural
+       machine translation: Encoder-decoder approaches.
+       arXiv preprint arXiv:1409.1259 (2014).
+    .. [2] Chung, Junyoung, et al.: Empirical Evaluation of Gated
+       Recurrent Neural Networks on Sequence Modeling.
+       arXiv preprint arXiv:1412.3555 (2014).
+    .. [3] Graves, Alex: "Generating sequences with recurrent neural networks."
+           arXiv preprint arXiv:1308.0850 (2013).
+
+    Notes
+    -----
+    An alternate update for the candidate hidden state is proposed in [2]_:
+
+    .. math::
+        c_t &= \sigma_c(x_t W_{ic} + (r_t \odot h_{t - 1})W_{hc} + b_c)\\
+
+    We use the formulation from [1]_ because it allows us to do all matrix
+    operations in a single dot product.
+    """
+    def __init__(self, incoming, num_units, vocab_size, encoder_hout, enc_in_mask,
+                 resetgate=ContextGate(W_cell=None),
+                 updategate=ContextGate(W_cell=None),
+                 hidden_update=ContextGate(W_cell=None,
+                                    nonlinearity=nonlinearities.tanh),
+                 hid_init=init.Constant(0.),
+                 Wemb=init.GlorotUniform(),
+                 Wsm=init.Normal(),
+                 bsm=init.Constant(0.),
+                 word_input_zero=init.Uniform(0.),
+                 attn_weight=init.GlorotNormal(),
+                 backwards=False,
+                 learn_init=False,
+                 gradient_steps=-1,
+                 grad_clipping=0,
+                 unroll_scan=False,
+                 mask_input=None,
+                 only_return_final=False,
+                 teacher_force=False,
+                 temp=1.0,
+                 use_mlp_attn=False,
+                 **kwargs):
+
+        # This layer inherits from a MergeLayer, because it can have three
+        # inputs - the layer input, the mask and the initial hidden state.  We
+        # will just provide the layer input as incomings, unless a mask input
+        # or initial hidden state was provided.
+        incomings = [incoming, encoder_hout, enc_in_mask]
+        self.mask_incoming_index = -1
+        self.hid_init_incoming_index = -1
+        if mask_input is not None:
+            incomings.append(mask_input)
+            self.mask_incoming_index = len(incomings)-1
+        if isinstance(hid_init, Layer):
+            incomings.append(hid_init)
+            self.hid_init_incoming_index = len(incomings)-1
+
+        assert encoder_hout is not None
+
+        self._srng = RandomStreams(get_rng().randint(1, 2147462579))
+
+        # Initialize parent layer
+        super(GRULayerESMGumPreAttn, self).__init__(incomings, **kwargs)
+
+        self.learn_init = learn_init
+        self.num_units = num_units
+        self.grad_clipping = grad_clipping
+        self.backwards = backwards
+        self.gradient_steps = gradient_steps
+        self.unroll_scan = unroll_scan
+        self.precompute_input = False
+        self.only_return_final = only_return_final
+        self.vocab_size = vocab_size
+        self.teacher_force = teacher_force
+        self.temp = temp
+        self.use_mlp_attn = use_mlp_attn
+
+        if unroll_scan and gradient_steps != -1:
+            raise ValueError(
+                "Gradient steps must be -1 when unroll_scan is true.")
+
+        # Retrieve the dimensionality of the incoming layer
+        #input_shape = self.input_shapes[0]
+        input_shape = [self.input_shapes[0][0], self.input_shapes[0][1], self.num_units]
+
+        if unroll_scan and input_shape[1] is None:
+            raise ValueError("Input sequence length cannot be specified as "
+                             "None when unroll_scan is True")
+
+        # Input dimensionality is the output dimensionality of the input layer
+        num_inputs = np.prod(input_shape[2:])
+
+        if self.use_mlp_attn:
+            self.W_attn = self.add_param(attn_weight, (num_units*2, 1), name="W_attn")
+
+        def add_gate_params(gate, gate_name):
+            """ Convenience function for adding layer parameters from a Gate
+            instance. """
+            return (self.add_param(gate.W_in, (num_inputs, num_units),
+                                   name="W_in_to_{}".format(gate_name)),
+                    self.add_param(gate.W_hid, (num_units, num_units),
+                                   name="W_hid_to_{}".format(gate_name)),
+                    self.add_param(gate.W_context, (num_units, num_units),
+                                    name="W_context_to_{}".format(gate_name)),
+                    self.add_param(gate.b, (num_units,),
+                                   name="b_{}".format(gate_name),
+                                   regularizable=False),
+                    gate.nonlinearity)
+
+        # Add in all parameters from gates
+        (self.W_in_to_updategate, self.W_hid_to_updategate, self.W_context_to_updategate, self.b_updategate,
+         self.nonlinearity_updategate) = add_gate_params(updategate,
+                                                         'updategate')
+        (self.W_in_to_resetgate, self.W_hid_to_resetgate, self.W_context_to_resetgate, self.b_resetgate,
+         self.nonlinearity_resetgate) = add_gate_params(resetgate, 'resetgate')
+
+        (self.W_in_to_hidden_update, self.W_hid_to_hidden_update, self.W_context_to_hidden_update,
+         self.b_hidden_update, self.nonlinearity_hid) = add_gate_params(
+             hidden_update, 'hidden_update')
+
+        self.Wemb = self.add_param(Wemb, (vocab_size, num_units), name="Wemb")
+        self.Wsm = self.add_param(Wsm, (num_units, vocab_size), name="Wsm")
+        self.bsm = self.add_param(bsm, (vocab_size,), name="bsm", regularizable=False)
+        self.word_input_zero = self.add_param(word_input_zero, (1, vocab_size,), 
+                name="word_input_zero", regularizable=False, trainable=self.teacher_force)
+
+        # Initialize hidden state
+        if isinstance(hid_init, Layer):
+            self.hid_init = hid_init
+        else:
+            self.hid_init = self.add_param(
+                hid_init, (1, self.num_units), name="hid_init",
+                trainable=learn_init, regularizable=False)
+
+    def get_output_shape_for(self, input_shapes):
+        # The shape of the input to this layer will be the first element
+        # of input_shapes, whether or not a mask input is being used.
+        input_shape = input_shapes[0]
+        # When only_return_final is true, the second (sequence step) dimension
+        # will be flattened
+        if self.only_return_final:
+            return input_shape[0], self.vocab_size
+        # Otherwise, the shape will be (n_batch, n_steps, num_units)
+        else:
+            return input_shape[0], input_shape[1], self.vocab_size
+
+    def get_output_for(self, inputs, **kwargs):
+        """
+        Compute this layer's output function given a symbolic input variable
+
+        Parameters
+        ----------
+        inputs : list of theano.TensorType
+            `inputs[0]` should always be the symbolic input variable.  When
+            this layer has a mask input (i.e. was instantiated with
+            `mask_input != None`, indicating that the lengths of sequences in
+            each batch vary), `inputs` should have length 2, where `inputs[1]`
+            is the `mask`.  The `mask` should be supplied as a Theano variable
+            denoting whether each time step in each sequence in the batch is
+            part of the sequence or not.  `mask` should be a matrix of shape
+            ``(n_batch, n_time_steps)`` where ``mask[i, j] = 1`` when ``j <=
+            (length of sequence i)`` and ``mask[i, j] = 0`` when ``j > (length
+            of sequence i)``. When the hidden state of this layer is to be
+            pre-filled (i.e. was set to a :class:`Layer` instance) `inputs`
+            should have length at least 2, and `inputs[-1]` is the hidden state
+            to prefill with.
+
+        Returns
+        -------
+        layer_output : theano.TensorType
+            Symbolic output variable.
+        """
+        # Retrieve the layer input
+        input = inputs[0]
+        encoder_hout = inputs[1]
+        enc_in_mask = inputs[2]
+        # Retrieve the mask when it is supplied
+        mask = None
+        hid_init = None
+        if self.mask_incoming_index > 0:
+            mask = inputs[self.mask_incoming_index]
+        if self.hid_init_incoming_index > 0:
+            hid_init = inputs[self.hid_init_incoming_index]
+
+        # Treat all dimensions after the second as flattened feature dimensions
+        if input.ndim > 3:
+            input = T.flatten(input, 3)
+
+        # Because scan iterates over the first dimension we dimshuffle to
+        # (n_time_steps, n_batch, n_features)
+        input = input.dimshuffle(1, 0)
+        seq_len, num_batch = input.shape
+
+        # Stack input weight matrices into a (num_inputs, 3*num_units)
+        # matrix, which speeds up computation
+        W_in_stacked = T.concatenate(
+            [self.W_in_to_resetgate, self.W_in_to_updategate,
+             self.W_in_to_hidden_update], axis=1)
+
+        # Same for hidden weight matrices
+        W_hid_stacked = T.concatenate(
+            [self.W_hid_to_resetgate, self.W_hid_to_updategate,
+             self.W_hid_to_hidden_update], axis=1)
+
+        # Same for attention
+        W_context_stacked = T.concatenate(
+            [self.W_context_to_resetgate, self.W_context_to_updategate,
+             self.W_context_to_hidden_update], axis=1)
+
+        # Stack gate biases into a (3*num_units) vector
+        b_stacked = T.concatenate(
+            [self.b_resetgate, self.b_updategate,
+             self.b_hidden_update], axis=0)
+
+        # When theano.scan calls step, input_n will be (n_batch, 3*num_units).
+        # We define a slicing function that extract the input to each GRU gate
+        def slice_w(x, n):
+            return x[:, n*self.num_units:(n+1)*self.num_units]
+
+        # Create single recurrent computation step function
+        # input__n is the n'th vector of the input
+        def step(input_n, gb, hid_previous, sm_out, *args):
+            # Compute W_{hr} h_{t - 1}, W_{hu} h_{t - 1}, and W_{hc} h_{t - 1}
+            hid_input = T.dot(hid_previous, W_hid_stacked)
+
+            if self.teacher_force:
+                input_n_force = Wemb[input_n]
+                input_n_noforce = T.dot(theano.tensor.nnet.softmax((sm_out + gb)/temp), Wemb)
+                input_n = T.switch(T.ge(input_n, 0).dimshuffle((0, 'x')), input_n_force, input_n_noforce)
+            else:
+                input_n = T.dot(theano.tensor.nnet.softmax(sm_out + gb), Wemb)
+
+            # do the attention
+            henc = encoder_hout #N, L_s, H
+            #henc = theano.printing.Print("henc", ("shape",))(henc)
+            hdec = hid_previous #N, H
+            #hdec = theano.printing.Print("hdec", ("shape",))(hdec)
+
+            # self.W_attn -- 2*H, 1
+            #hdec = theano.printing.Print("hdec")(hdec)
+            hdec_proj = T.dot(hdec, self.W_attn[:self.num_units, :]).dimshuffle((0, 'x', 1))
+            #hdec_proj = theano.printing.Print("hdec_proj")(hdec_proj)
+            henc_ns = henc.reshape((-1, self.num_units))
+            henc_proj_ns = T.dot(henc_ns, self.W_attn[:self.num_units, :])
+            henc_proj = henc_proj_ns.reshape((henc.shape[0], henc.shape[1], 1))
+            #henc_proj = T.batched_dot(henc, self.W_attn[num_units:, :]) #N, L_s
+            e_raw = (hdec_proj + henc_proj)[:, :, 0]
+            #print e_raw.type
+
+            #e_raw = theano.printing.Print("e_raw", ("shape",))(e_raw)
+
+            e_raw_msk = e_raw * enc_in_mask
+            #e_raw_msk = e_raw_msk + theano.printing.Print("e_raw_msk:")(e_raw_msk[0, :]).dimshuffle(('x', 0))*0.00000000001
+            e_exp = T.exp(e_raw_msk - e_raw_msk.max(axis=1, keepdims=True))
+            e_exp = e_exp * enc_in_mask + 1e-8
+            attn = e_exp / e_exp.sum(axis=1, keepdims=True) # N, L_s
+            attn = attn + theano.printing.Print("Attn:")(attn[0, :]).dimshuffle(('x', 0))*0.00000001
+
+            context = attn.dimshuffle((0, 1, 'x')) * henc
+            context = context.sum(axis=1)
+
+            ctx_input = T.dot(context, W_context_stacked)
+
+            if self.grad_clipping:
+                input_n = theano.gradient.grad_clip(
+                    input_n, -self.grad_clipping, self.grad_clipping)
+                hid_input = theano.gradient.grad_clip(
+                    hid_input, -self.grad_clipping, self.grad_clipping)
+
+
+            # Compute W_{xr}x_t + b_r, W_{xu}x_t + b_u, and W_{xc}x_t + b_c
+            input_n = T.dot(input_n, W_in_stacked) + b_stacked
+
+            # Reset and update gates
+            resetgate = slice_w(hid_input, 0) + slice_w(input_n, 0) + slice_w(ctx_input, 0)
+            updategate = slice_w(hid_input, 1) + slice_w(input_n, 1) + slice_w(ctx_input, 1)
+            resetgate = self.nonlinearity_resetgate(resetgate)
+            updategate = self.nonlinearity_updategate(updategate)
+
+            # Compute W_{xc}x_t + r_t \odot (W_{hc} h_{t - 1})
+            hidden_update_in = slice_w(input_n, 2)
+            hidden_update_hid = slice_w(hid_input, 2)
+            hidden_update_ctx = slice_w(ctx_input, 2)
+            hidden_update = hidden_update_ctx + hidden_update_in + resetgate*hidden_update_hid
+            if self.grad_clipping:
+                hidden_update = theano.gradient.grad_clip(
+                    hidden_update, -self.grad_clipping, self.grad_clipping)
+            hidden_update = self.nonlinearity_hid(hidden_update)
+
+            # Compute (1 - u_t)h_{t - 1} + u_t c_t
+            hid = (1 - updategate)*hid_previous + updategate*hidden_update
+
+            sm_out = T.dot(hid, Wsm) + bsm
+
+            return hid, sm_out
+
+        def step_masked(input_n, mask_n, gb, hid_previous, *args):
+            hid = step(input_n, gb, hid_previous, *args)
+
+            # Skip over any input with mask 0 by copying the previous
+            # hidden state; proceed normally for any input with mask 1.
+            hid = T.switch(mask_n, hid, hid_previous)
+
+            return hid
+        
+        out_shape = (self.input_shapes[0][1], self.input_shapes[0][0], self.vocab_size)
+        uniform = self._srng.uniform(out_shape,low=0,high=1)
+        eps = 1e-10
+        gumbel = -T.log(-T.log(uniform + eps) + eps)
+
+        if mask is not None:
+            # mask is given as (batch_size, seq_len). Because scan iterates
+            # over first dimension, we dimshuffle to (seq_len, batch_size) and
+            # add a broadcastable dimension
+            mask = mask.dimshuffle(1, 0, 'x')
+            sequences = [input, mask, gumbel]
+            step_fun = step_masked
+        else:
+            sequences = [input, gumbel]
+            step_fun = step
+
+
+        if not isinstance(self.hid_init, Layer):
+            # Dot against a 1s vector to repeat to shape (num_batch, num_units)
+            hid_init = T.dot(T.ones((num_batch, 1)), self.hid_init)
+
+        if not isinstance(self.word_input_zero, Layer):
+            # Dot against a 1s vector to repeat to shape (num_batch, num_units)
+            word_input_zero = T.dot(T.ones((num_batch, 1)), self.word_input_zero)
+
+        # The hidden-to-hidden weight matrix is always used in step
+        non_seqs = [W_hid_stacked, W_context_stacked]
         # When we aren't precomputing the input outside of scan, we need to
         # provide the input weights and biases to the step function
         non_seqs += [W_in_stacked, b_stacked]
