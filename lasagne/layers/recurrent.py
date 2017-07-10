@@ -3310,7 +3310,8 @@ class GRULayerESMGumPreAttn(MergeLayer):
 
         if self.use_mlp_attn:
             #self.W_attn = self.add_param(attn_weight, (num_units*2, 1), name="W_attn")
-            self.W_attn = self.add_param(attn_weight, (num_units, num_units), name="W_attn")
+            self.W_attn = self.add_param(attn_weight, (num_units*2, num_units), name="W_attn")
+            self.W_attn2 = self.add_param(attn_weight, (num_units, 1), name="W_attn2")
 
         def add_gate_params(gate, gate_name):
             """ Convenience function for adding layer parameters from a Gate
@@ -3459,15 +3460,20 @@ class GRULayerESMGumPreAttn(MergeLayer):
             ##hdec = theano.printing.Print("hdec")(hdec)
             #hdec_proj = T.dot(hdec, self.W_attn[:self.num_units, :])[:, 0].dimshuffle((0, 'x'))
             ##hdec_proj = theano.printing.Print("hdec_proj")(hdec_proj)
-            #henc_ns = henc.reshape((-1, self.num_units))
-            #henc_proj_ns = T.dot(henc_ns, self.W_attn[self.num_units:, :])
-            #henc_proj = henc_proj_ns.reshape((henc.shape[0], henc.shape[1], 1))[:, :, 0]
+            hdec_ds = hdec.dimshuffle(0, 'x', 1)
+            hdec_expand = T.ones_like(henc) * hdec_ds
+            hjoint = T.concatenate([hdec_expand, henc], axis=2)
+            hjoint_rs = hjoint.reshape((-1, self.num_units*2))
+            hjoint_h1 = T.dot(hjoint_rs, self.W_attn)
+            hjoint_a1 = T.nnet.relu(hjoint_h1)
+            hjoint_h2 = T.dot(hjoint_a1, self.W_attn2)
+            hjoint_proj = hjoint_h2.reshape((num_batch, seq_len))
             #henc_proj = theano.printing.Print("henc_proj")(henc_proj)
-            #e_raw = (hdec_proj + henc_proj)
+            e_raw = hjoint_proj
 
-            hdec_proj = T.dot(hdec, self.W_attn)
+            #hdec_proj = T.dot(hdec, self.W_attn)
             #hdec_proj = theano.printing.Print("hdec_proj")(hdec_proj)
-            e_raw = T.batched_dot(henc, hdec_proj) #N, L_s
+            #e_raw = T.batched_dot(henc, hdec_proj) #N, L_s
             #print e_raw.type
 
             #e_raw = theano.printing.Print("e_raw", ("shape",))(e_raw)
@@ -3566,7 +3572,9 @@ class GRULayerESMGumPreAttn(MergeLayer):
         
         if self.use_mlp_attn:
             W_attn = self.W_attn
+            W_attn2 = self.W_attn2
             non_seqs.append(W_attn)
+            non_seqs.append(W_attn2)
 
         if self.unroll_scan:
             # Retrieve the dimensionality of the incoming layer
