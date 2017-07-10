@@ -3309,7 +3309,8 @@ class GRULayerESMGumPreAttn(MergeLayer):
         num_inputs = np.prod(input_shape[2:])
 
         if self.use_mlp_attn:
-            self.W_attn = self.add_param(attn_weight, (num_units*2, 1), name="W_attn")
+            #self.W_attn = self.add_param(attn_weight, (num_units*2, 1), name="W_attn")
+            self.W_attn = self.add_param(attn_weight, (num_units, num_units), name="W_attn")
 
         def add_gate_params(gate, gate_name):
             """ Convenience function for adding layer parameters from a Gate
@@ -3455,14 +3456,18 @@ class GRULayerESMGumPreAttn(MergeLayer):
             #hdec = theano.printing.Print("hdec", ("shape",))(hdec)
 
             # self.W_attn -- 2*H, 1
-            #hdec = theano.printing.Print("hdec")(hdec)
-            hdec_proj = T.dot(hdec, self.W_attn[:self.num_units, :])[:, 0].dimshuffle((0, 'x'))
-            hdec_proj = theano.printing.Print("hdec_proj")(hdec_proj)
-            henc_ns = henc.reshape((-1, self.num_units))
-            henc_proj_ns = T.dot(henc_ns, self.W_attn[self.num_units:, :])
-            henc_proj = henc_proj_ns.reshape((henc.shape[0], henc.shape[1], 1))[:, :, 0]
-            #henc_proj = T.batched_dot(henc, self.W_attn[num_units:, :]) #N, L_s
-            e_raw = (hdec_proj + henc_proj)
+            ##hdec = theano.printing.Print("hdec")(hdec)
+            #hdec_proj = T.dot(hdec, self.W_attn[:self.num_units, :])[:, 0].dimshuffle((0, 'x'))
+            ##hdec_proj = theano.printing.Print("hdec_proj")(hdec_proj)
+            #henc_ns = henc.reshape((-1, self.num_units))
+            #henc_proj_ns = T.dot(henc_ns, self.W_attn[self.num_units:, :])
+            #henc_proj = henc_proj_ns.reshape((henc.shape[0], henc.shape[1], 1))[:, :, 0]
+            #henc_proj = theano.printing.Print("henc_proj")(henc_proj)
+            #e_raw = (hdec_proj + henc_proj)
+
+            hdec_proj = T.dot(hdec, self.W_attn)
+            #hdec_proj = theano.printing.Print("hdec_proj")(hdec_proj)
+            e_raw = T.batched_dot(henc, hdec_proj) #N, L_s
             #print e_raw.type
 
             #e_raw = theano.printing.Print("e_raw", ("shape",))(e_raw)
