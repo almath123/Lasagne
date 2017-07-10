@@ -3457,9 +3457,9 @@ class GRULayerESMGumPreAttn(MergeLayer):
             # self.W_attn -- 2*H, 1
             #hdec = theano.printing.Print("hdec")(hdec)
             hdec_proj = T.dot(hdec, self.W_attn[:self.num_units, :]).dimshuffle((0, 'x', 1))
-            #hdec_proj = theano.printing.Print("hdec_proj")(hdec_proj)
+            hdec_proj = theano.printing.Print("hdec_proj")(hdec_proj)
             henc_ns = henc.reshape((-1, self.num_units))
-            henc_proj_ns = T.dot(henc_ns, self.W_attn[:self.num_units, :])
+            henc_proj_ns = T.dot(henc_ns, self.W_attn[self.num_units:, :])
             henc_proj = henc_proj_ns.reshape((henc.shape[0], henc.shape[1], 1))
             #henc_proj = T.batched_dot(henc, self.W_attn[num_units:, :]) #N, L_s
             e_raw = (hdec_proj + henc_proj)[:, :, 0]
